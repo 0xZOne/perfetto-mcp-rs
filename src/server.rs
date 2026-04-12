@@ -262,8 +262,7 @@ impl PerfettoMcpServer {
             .query("SELECT upid, pid, name, start_ts, end_ts FROM process ORDER BY start_ts")
             .await
             .map_err(|e| format!("Failed to list processes: {e}"))?;
-        serde_json::to_string_pretty(&rows)
-            .map_err(|e| format!("Failed to serialize results: {e}"))
+        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
     }
 
     #[tool(
@@ -301,8 +300,7 @@ impl PerfettoMcpServer {
                 params.process_name
             ));
         }
-        serde_json::to_string_pretty(&rows)
-            .map_err(|e| format!("Failed to serialize results: {e}"))
+        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
     }
 
     #[tool(
@@ -341,12 +339,13 @@ impl PerfettoMcpServer {
             other => format!("Failed: {other}"),
         })?;
         if rows.is_empty() {
-            return Ok("No scroll jank found in this trace (no scroll activity captured \
+            return Ok(
+                "No scroll jank found in this trace (no scroll activity captured \
                        or no janky frames detected)."
-                .to_owned());
+                    .to_owned(),
+            );
         }
-        serde_json::to_string_pretty(&rows)
-            .map_err(|e| format!("Failed to serialize results: {e}"))
+        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
     }
 }
 
