@@ -33,9 +33,7 @@ async fn main() -> anyhow::Result<()> {
     // MCP servers must not write to stdout (reserved for JSON-RPC).
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::filter::EnvFilter::from_default_env(),
-        )
+        .with_env_filter(tracing_subscriber::filter::EnvFilter::from_default_env())
         .init();
 
     let args = Args::parse();

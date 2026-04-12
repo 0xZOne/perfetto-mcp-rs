@@ -9,8 +9,7 @@ use anyhow::{bail, Context, Result};
 const TP_VERSION: &str = "v54.0";
 
 /// Base URL for Perfetto LUCI artifacts.
-const ARTIFACTS_BASE: &str =
-    "https://commondatastorage.googleapis.com/perfetto-luci-artifacts";
+const ARTIFACTS_BASE: &str = "https://commondatastorage.googleapis.com/perfetto-luci-artifacts";
 
 /// Find or download trace_processor_shell.
 ///
@@ -48,8 +47,7 @@ pub async fn ensure_binary() -> Result<PathBuf> {
 
 /// Return the platform-specific cache directory for the pinned version.
 fn cache_dir() -> Result<PathBuf> {
-    let base = dirs::data_local_dir()
-        .context("cannot determine local data directory")?;
+    let base = dirs::data_local_dir().context("cannot determine local data directory")?;
     Ok(base.join("perfetto-mcp-rs").join(TP_VERSION))
 }
 
@@ -61,8 +59,7 @@ fn is_stale(path: &Path) -> bool {
     let Ok(modified) = metadata.modified() else {
         return true;
     };
-    modified.elapsed().unwrap_or_default()
-        > std::time::Duration::from_secs(7 * 24 * 3600)
+    modified.elapsed().unwrap_or_default() > std::time::Duration::from_secs(7 * 24 * 3600)
 }
 
 /// Download trace_processor_shell for the current platform.
@@ -148,9 +145,13 @@ mod tests {
     fn platform_arch_returns_known() {
         // Should not panic on the current platform.
         let arch = platform_arch().unwrap();
-        assert!(
-            ["linux-amd64", "linux-arm64", "mac-amd64", "mac-arm64", "windows-amd64"]
-                .contains(&arch),
-        );
+        assert!([
+            "linux-amd64",
+            "linux-arm64",
+            "mac-amd64",
+            "mac-arm64",
+            "windows-amd64"
+        ]
+        .contains(&arch),);
     }
 }

@@ -4,13 +4,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use rmcp::{
-    ServerHandler, ServiceExt,
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::ServerInfo,
-    tool, tool_handler, tool_router,
-};
 use rmcp::schemars;
+use rmcp::{
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    model::{ServerCapabilities, ServerInfo},
+    tool, tool_handler, tool_router, ServerHandler, ServiceExt,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -32,12 +31,11 @@ impl ServerHandler for PerfettoMcpServer {
                 name: "perfetto-mcp-rs".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 title: None,
-                description: Some(
-                    "MCP server for Perfetto trace analysis".into(),
-                ),
+                description: Some("MCP server for Perfetto trace analysis".into()),
                 icons: None,
                 website_url: None,
             },
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
             instructions: Some(
                 "Perfetto trace analysis server. Start by calling load_trace \
                  with a path to a .perfetto-trace or .pftrace file, then use \
@@ -127,21 +125,15 @@ impl PerfettoMcpServer {
     ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
 
-        let rows = client
-            .query(&params.sql)
-            .await
-            .map_err(|e| match e {
-                PerfettoError::QueryError(msg) => format!("SQL error: {msg}"),
-                PerfettoError::TooManyRows => {
-                    "Query returned more than 5000 rows. Add a LIMIT clause \
+        let rows = client.query(&params.sql).await.map_err(|e| match e {
+            PerfettoError::QueryError(msg) => format!("SQL error: {msg}"),
+            PerfettoError::TooManyRows => "Query returned more than 5000 rows. Add a LIMIT clause \
                      or narrow your WHERE condition."
-                        .to_owned()
-                }
-                other => format!("Query failed: {other}"),
-            })?;
+                .to_owned(),
+            other => format!("Query failed: {other}"),
+        })?;
 
-        serde_json::to_string_pretty(&rows)
-            .map_err(|e| format!("Failed to serialize results: {e}"))
+        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
     }
 
     #[tool(
@@ -213,10 +205,7 @@ impl PerfettoMcpServer {
         for row in &rows {
             let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("?");
             let col_type = row.get("type").and_then(|v| v.as_str()).unwrap_or("?");
-            let notnull = row
-                .get("notnull")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
+            let notnull = row.get("notnull").and_then(|v| v.as_i64()).unwrap_or(0);
             let nullable = if notnull == 0 { " (nullable)" } else { "" };
             output.push_str(&format!("  {name}: {col_type}{nullable}\n"));
         }
@@ -270,6 +259,7 @@ fn sanitize_glob_param(s: &str) -> Result<String, PerfettoError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn sanitize_allows_valid_patterns() {
@@ -284,5 +274,45 @@ mod tests {
         assert!(sanitize_glob_param("'; DROP TABLE--").is_err());
         assert!(sanitize_glob_param("name OR 1=1").is_err());
         assert!(sanitize_glob_param("table\nname").is_err());
+    }
+
+    fn test_server() -> PerfettoMcpServer {
+        let manager = Arc::new(TraceProcessorManager::new(
+            PathBuf::from("/nonexistent/trace_processor_shell"),
+            1,
+        ));
+        PerfettoMcpServer::new(manager)
+    }
+
+    // Without this capability, clients skip `tools/list` on handshake and no
+    // tools are registered — the router still has them, but they're invisible.
+    #[test]
+    fn get_info_declares_tools_capability() {
+        let info = test_server().get_info();
+        assert!(
+            info.capabilities.tools.is_some(),
+            "server must declare `tools` capability so clients call tools/list"
+        );
+    }
+
+    #[test]
+    fn tool_router_exposes_expected_tools() {
+        let server = test_server();
+        let mut names: Vec<String> = server
+            .tool_router
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "execute_sql",
+                "list_tables",
+                "load_trace",
+                "table_structure"
+            ],
+        );
     }
 }

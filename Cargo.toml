@@ -3,7 +3,7 @@ name = "perfetto-mcp-rs"
 version = "0.1.0"
 edition = "2021"
 description = "MCP server for Perfetto trace analysis"
-license = "Apache-2.0"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 rmcp = { version = "0.16", features = ["server", "transport-io", "macros"] }

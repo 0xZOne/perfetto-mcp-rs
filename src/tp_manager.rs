@@ -20,11 +20,7 @@ struct TraceProcessorInstance {
 
 impl TraceProcessorInstance {
     /// Spawn trace_processor_shell in HTTP-RPC mode on the given port.
-    async fn spawn(
-        binary: &Path,
-        trace_path: &Path,
-        port: u16,
-    ) -> Result<Self> {
+    async fn spawn(binary: &Path, trace_path: &Path, port: u16) -> Result<Self> {
         let process = Command::new(binary)
             .arg("-D")
             .arg("--http-port")
@@ -138,10 +134,7 @@ impl TraceProcessorManager {
     /// promoted in LRU order). If the instance's process has died, it is
     /// respawned. If the cache is full, the least recently used instance
     /// is evicted (its process is killed via `kill_on_drop`).
-    pub async fn get_client(
-        &self,
-        trace_path: &Path,
-    ) -> Result<TraceProcessorClient> {
+    pub async fn get_client(&self, trace_path: &Path) -> Result<TraceProcessorClient> {
         let canonical = trace_path
             .canonicalize()
             .with_context(|| format!("trace file not found: {}", trace_path.display()))?;
@@ -167,9 +160,7 @@ impl TraceProcessorManager {
         };
 
         // Spawn without holding the lock; this can take seconds.
-        let instance =
-            TraceProcessorInstance::spawn(&self.binary_path, &canonical, port)
-                .await?;
+        let instance = TraceProcessorInstance::spawn(&self.binary_path, &canonical, port).await?;
         let client = instance.client.clone();
 
         // A concurrent task may have inserted an entry for the same trace
@@ -189,8 +180,7 @@ mod tests {
 
     #[test]
     fn lru_evicts_oldest_when_full() {
-        let mut cache: LruCache<String, u16> =
-            LruCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache: LruCache<String, u16> = LruCache::new(NonZeroUsize::new(2).unwrap());
         cache.put("a".into(), 1);
         cache.put("b".into(), 2);
         cache.put("c".into(), 3);
@@ -202,8 +192,7 @@ mod tests {
 
     #[test]
     fn lru_access_refreshes_entry() {
-        let mut cache: LruCache<String, u16> =
-            LruCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache: LruCache<String, u16> = LruCache::new(NonZeroUsize::new(2).unwrap());
         cache.put("a".into(), 1);
         cache.put("b".into(), 2);
         // Access "a" to refresh it.

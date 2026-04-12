@@ -30,11 +30,7 @@ pub fn decode_query_result(result: &QueryResult) -> Result<Vec<Value>, PerfettoE
         let mut varint_iter = batch.varint_cells.iter();
         let mut float64_iter = batch.float64_cells.iter();
         let mut blob_iter = batch.blob_cells.iter();
-        let mut string_iter = batch
-            .string_cells
-            .as_deref()
-            .unwrap_or("")
-            .split('\0');
+        let mut string_iter = batch.string_cells.as_deref().unwrap_or("").split('\0');
 
         let mut col_idx: usize = 0;
         let mut current_row = serde_json::Map::with_capacity(num_cols);
@@ -86,10 +82,7 @@ mod tests {
     use super::*;
     use crate::proto::query_result::CellsBatch;
 
-    fn make_result(
-        columns: Vec<&str>,
-        batches: Vec<CellsBatch>,
-    ) -> QueryResult {
+    fn make_result(columns: Vec<&str>, batches: Vec<CellsBatch>) -> QueryResult {
         QueryResult {
             column_names: columns.into_iter().map(String::from).collect(),
             error: None,
@@ -113,7 +106,7 @@ mod tests {
                 CellType::CellFloat64 as i32,
             ],
             varint_cells: vec![42, 99],
-            float64_cells: vec![3.14, 2.72],
+            float64_cells: vec![1.5, 2.5],
             blob_cells: vec![],
             string_cells: Some("hello\0world".to_owned()),
             is_last_batch: Some(true),
@@ -124,19 +117,16 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["name"], "hello");
         assert_eq!(rows[0]["count"], 42);
-        assert_eq!(rows[0]["value"], 3.14);
+        assert_eq!(rows[0]["value"], 1.5);
         assert_eq!(rows[1]["name"], "world");
         assert_eq!(rows[1]["count"], 99);
-        assert_eq!(rows[1]["value"], 2.72);
+        assert_eq!(rows[1]["value"], 2.5);
     }
 
     #[test]
     fn decode_null_cells() {
         let batch = CellsBatch {
-            cells: vec![
-                CellType::CellString as i32,
-                CellType::CellNull as i32,
-            ],
+            cells: vec![CellType::CellString as i32, CellType::CellNull as i32],
             varint_cells: vec![],
             float64_cells: vec![],
             blob_cells: vec![],
@@ -214,10 +204,7 @@ mod tests {
             is_last_batch: Some(false),
         };
         let batch2 = CellsBatch {
-            cells: vec![
-                CellType::CellVarint as i32,
-                CellType::CellString as i32,
-            ],
+            cells: vec![CellType::CellVarint as i32, CellType::CellString as i32],
             varint_cells: vec![3],
             float64_cells: vec![],
             blob_cells: vec![],
