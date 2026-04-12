@@ -33,6 +33,35 @@ Supported platforms: linux amd64/arm64, macOS amd64/arm64, Windows amd64.
 If you'd rather not run a script, grab the binary directly from the
 [releases page](https://github.com/0xZOne/perfetto-mcp-rs/releases).
 
+## Uninstall
+
+This unregisters the server from Claude Code, removes the binary, and
+deletes the cached `trace_processor_shell` download.
+
+**Linux:**
+
+```sh
+claude mcp remove perfetto-mcp-rs --scope user 2>/dev/null || true
+rm -f ~/.local/bin/perfetto-mcp-rs
+rm -rf ~/.local/share/perfetto-mcp-rs
+```
+
+**macOS:**
+
+```sh
+claude mcp remove perfetto-mcp-rs --scope user 2>/dev/null || true
+rm -f ~/.local/bin/perfetto-mcp-rs
+rm -rf "$HOME/Library/Application Support/perfetto-mcp-rs"
+```
+
+**Windows (PowerShell) — close Claude Code first so the .exe isn't locked:**
+
+```powershell
+claude mcp remove perfetto-mcp-rs --scope user 2>$null
+Remove-Item -Force "$HOME\.local\bin\perfetto-mcp-rs.exe*" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\perfetto-mcp-rs" -ErrorAction SilentlyContinue
+```
+
 ## Tools
 
 | Tool | Purpose |
