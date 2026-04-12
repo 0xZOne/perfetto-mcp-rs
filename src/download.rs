@@ -11,6 +11,11 @@ const TP_VERSION: &str = "v54.0";
 /// Base URL for Perfetto LUCI artifacts.
 const ARTIFACTS_BASE: &str = "https://commondatastorage.googleapis.com/perfetto-luci-artifacts";
 
+#[cfg(windows)]
+const BINARY_NAME: &str = "trace_processor_shell.exe";
+#[cfg(not(windows))]
+const BINARY_NAME: &str = "trace_processor_shell";
+
 /// Find or download trace_processor_shell.
 ///
 /// Lookup order:
@@ -35,7 +40,7 @@ pub async fn ensure_binary() -> Result<PathBuf> {
 
     // 3. Cached download.
     let cache_dir = cache_dir()?;
-    let binary_path = cache_dir.join("trace_processor_shell");
+    let binary_path = cache_dir.join(BINARY_NAME);
     if binary_path.exists() && !is_stale(&binary_path) {
         return Ok(binary_path);
     }
@@ -65,7 +70,7 @@ fn is_stale(path: &Path) -> bool {
 /// Download trace_processor_shell for the current platform.
 async fn download_binary(dest: &Path) -> Result<()> {
     let arch = platform_arch()?;
-    let url = format!("{ARTIFACTS_BASE}/{TP_VERSION}/{arch}/trace_processor_shell");
+    let url = format!("{ARTIFACTS_BASE}/{TP_VERSION}/{arch}/{BINARY_NAME}");
 
     tracing::info!("downloading trace_processor_shell {TP_VERSION} ({arch})");
 

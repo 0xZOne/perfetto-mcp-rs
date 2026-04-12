@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use lru::LruCache;
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OnceCell};
 
 use crate::tp_client::TraceProcessorClient;
 
@@ -96,13 +96,14 @@ impl Drop for TraceProcessorInstance {
 /// with LRU eviction when the pool exceeds `max_instances`.
 pub struct TraceProcessorManager {
     inner: Mutex<ManagerInner>,
-    binary_path: PathBuf,
+    // Resolved lazily so the MCP handshake completes before any binary download.
+    binary_path: OnceCell<PathBuf>,
 }
 
 impl std::fmt::Debug for TraceProcessorManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TraceProcessorManager")
-            .field("binary_path", &self.binary_path)
+            .field("binary_path", &self.binary_path.get())
             .finish_non_exhaustive()
     }
 }
@@ -113,11 +114,20 @@ struct ManagerInner {
 }
 
 impl TraceProcessorManager {
-    /// Create a new manager.
-    ///
-    /// `binary_path` should point to `trace_processor_shell`.
-    /// `max_instances` controls LRU capacity.
-    pub fn new(binary_path: PathBuf, max_instances: usize) -> Self {
+    /// Create a new manager that lazily resolves `trace_processor_shell` on
+    /// the first `get_client` call.
+    pub fn new(max_instances: usize) -> Self {
+        Self::build(max_instances, OnceCell::new())
+    }
+
+    /// Create a manager with a pre-resolved binary path (used by tests to
+    /// avoid any download or PATH lookup).
+    #[cfg(test)]
+    pub fn new_with_binary(binary_path: PathBuf, max_instances: usize) -> Self {
+        Self::build(max_instances, OnceCell::new_with(Some(binary_path)))
+    }
+
+    fn build(max_instances: usize, binary_path: OnceCell<PathBuf>) -> Self {
         let cap = NonZeroUsize::new(max_instances).unwrap_or(NonZeroUsize::MIN);
         Self {
             inner: Mutex::new(ManagerInner {
@@ -128,6 +138,20 @@ impl TraceProcessorManager {
         }
     }
 
+    /// Resolve `trace_processor_shell`, downloading it on first call if needed.
+    /// Errors are not cached, so a transient download failure can be retried.
+    async fn ensure_binary(&self) -> Result<&Path> {
+        let path = self
+            .binary_path
+            .get_or_try_init(|| async {
+                let p = crate::download::ensure_binary().await?;
+                tracing::info!("using trace_processor_shell: {}", p.display());
+                Ok::<PathBuf, anyhow::Error>(p)
+            })
+            .await?;
+        Ok(path.as_path())
+    }
+
     /// Get or create a `TraceProcessorClient` for the given trace file.
     ///
     /// If the instance already exists in the cache, it is returned (and
@@ -135,6 +159,8 @@ impl TraceProcessorManager {
     /// respawned. If the cache is full, the least recently used instance
     /// is evicted (its process is killed via `kill_on_drop`).
     pub async fn get_client(&self, trace_path: &Path) -> Result<TraceProcessorClient> {
+        let binary = self.ensure_binary().await?.to_path_buf();
+
         let canonical = trace_path
             .canonicalize()
             .with_context(|| format!("trace file not found: {}", trace_path.display()))?;
@@ -160,7 +186,7 @@ impl TraceProcessorManager {
         };
 
         // Spawn without holding the lock; this can take seconds.
-        let instance = TraceProcessorInstance::spawn(&self.binary_path, &canonical, port).await?;
+        let instance = TraceProcessorInstance::spawn(&binary, &canonical, port).await?;
         let client = instance.client.clone();
 
         // A concurrent task may have inserted an entry for the same trace

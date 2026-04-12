@@ -277,7 +277,7 @@ mod tests {
     }
 
     fn test_server() -> PerfettoMcpServer {
-        let manager = Arc::new(TraceProcessorManager::new(
+        let manager = Arc::new(TraceProcessorManager::new_with_binary(
             PathBuf::from("/nonexistent/trace_processor_shell"),
             1,
         ));

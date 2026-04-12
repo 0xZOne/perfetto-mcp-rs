@@ -43,13 +43,7 @@ async fn main() -> anyhow::Result<()> {
         args.max_instances,
     );
 
-    let binary_path = download::ensure_binary().await?;
-    tracing::info!("using trace_processor_shell: {}", binary_path.display());
-
-    let manager = Arc::new(tp_manager::TraceProcessorManager::new(
-        binary_path,
-        args.max_instances,
-    ));
+    let manager = Arc::new(tp_manager::TraceProcessorManager::new(args.max_instances));
     let server = server::PerfettoMcpServer::new(manager);
     server.run().await
 }
