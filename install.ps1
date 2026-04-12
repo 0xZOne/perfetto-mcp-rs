@@ -42,6 +42,24 @@ function Install-PerfettoMcp {
 
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
     $dest = Join-Path $installDir $binName
+
+    # Best-effort sweep of aside files left by prior installs. They can only
+    # be deleted once the old claude subprocess holding them has exited.
+    Get-ChildItem -LiteralPath $installDir -Filter "$binName.old-*" -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+
+    # Windows holds a DELETE lock on a running .exe, so we can't overwrite or
+    # unlink it — but MoveFile is allowed on locked files. Rename aside so
+    # the download target is free; the aside is cleaned up next install.
+    if (Test-Path -LiteralPath $dest) {
+        $aside = "$dest.old-$([DateTimeOffset]::Now.ToUnixTimeSeconds())"
+        try {
+            Move-Item -LiteralPath $dest -Destination $aside -Force -ErrorAction Stop
+        } catch {
+            _fail "cannot replace $dest - is Claude Code running with it? Close Claude Code and retry."
+        }
+    }
+
     try {
         Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
     } catch {

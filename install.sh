@@ -140,6 +140,23 @@ main() {
     || err "download failed: ${url}"
 
   mkdir -p "$INSTALL_DIR"
+
+  # On Windows a running .exe is locked against unlink+create, which is what
+  # `install` does. MoveFile (mv) is allowed on locked files, so rename the
+  # existing binary aside first and let the new one land at the canonical
+  # path. The aside is cleaned up on the next install, once the old claude
+  # subprocess has exited.
+  case "$platform" in
+    windows-*)
+      rm -f "${INSTALL_DIR}/${bin_file}".old-* 2>/dev/null || true
+      if [ -e "${INSTALL_DIR}/${bin_file}" ]; then
+        ts="$(date +%s)"
+        mv "${INSTALL_DIR}/${bin_file}" "${INSTALL_DIR}/${bin_file}.old-${ts}" 2>/dev/null \
+          || err "cannot replace ${INSTALL_DIR}/${bin_file} (is Claude Code running? close it and retry)"
+      fi
+      ;;
+  esac
+
   install -m 0755 "$tmp" "${INSTALL_DIR}/${bin_file}"
   info "Installed to ${INSTALL_DIR}/${bin_file}"
 
