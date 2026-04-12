@@ -21,7 +21,8 @@ Claude Code is installed, registers it as a user-scope MCP server. Restart
 Claude Code to pick it up.
 
 Supported platforms: linux amd64/arm64, macOS amd64/arm64, Windows amd64
-(`.exe` download from the [releases page](https://github.com/0xZOne/perfetto-mcp-rs/releases)).
+(run the one-liner above from **Git Bash / MSYS2 / Cygwin**, or download the
+`.exe` directly from the [releases page](https://github.com/0xZOne/perfetto-mcp-rs/releases)).
 
 ## Tools
 

@@ -29,10 +29,9 @@ detect_platform() {
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
   arch="$(uname -m)"
   case "$os" in
-    linux)  os_tag="linux" ;;
-    darwin) os_tag="mac" ;;
-    msys*|mingw*|cygwin*)
-      err "Windows not supported by this script. Download the .exe from https://github.com/${REPO}/releases" ;;
+    linux)                 os_tag="linux" ;;
+    darwin)                os_tag="mac" ;;
+    msys*|mingw*|cygwin*)  os_tag="windows" ;;
     *) err "unsupported OS: $os" ;;
   esac
   case "$arch" in
@@ -40,6 +39,9 @@ detect_platform() {
     aarch64|arm64) arch_tag="arm64" ;;
     *) err "unsupported architecture: $arch" ;;
   esac
+  if [ "$os_tag" = "windows" ] && [ "$arch_tag" != "amd64" ]; then
+    err "only windows-amd64 is released; got $arch_tag"
+  fi
   printf '%s-%s' "$os_tag" "$arch_tag"
 }
 
@@ -56,6 +58,10 @@ resolve_version() {
 
 register_with_claude() {
   bin_path="$1"
+  # claude.exe on Windows wants a native path, not /c/Users/... from MSYS.
+  if command -v cygpath >/dev/null 2>&1; then
+    bin_path="$(cygpath -w "$bin_path")"
+  fi
   if ! command -v claude >/dev/null 2>&1; then
     cat <<EOF
 
@@ -84,6 +90,13 @@ main() {
 
   platform="$(detect_platform)"
   asset="${BIN_NAME}-${platform}"
+  bin_file="${BIN_NAME}"
+  case "$platform" in
+    windows-*)
+      asset="${asset}.exe"
+      bin_file="${BIN_NAME}.exe"
+      ;;
+  esac
 
   info "Detecting latest release from github.com/${REPO}"
   tag="$(resolve_version)"
@@ -97,8 +110,8 @@ main() {
     || err "download failed: ${url}"
 
   mkdir -p "$INSTALL_DIR"
-  install -m 0755 "$tmp" "${INSTALL_DIR}/${BIN_NAME}"
-  info "Installed to ${INSTALL_DIR}/${BIN_NAME}"
+  install -m 0755 "$tmp" "${INSTALL_DIR}/${bin_file}"
+  info "Installed to ${INSTALL_DIR}/${bin_file}"
 
   case ":$PATH:" in
     *":${INSTALL_DIR}:"*) ;;
@@ -113,7 +126,7 @@ EOF
       ;;
   esac
 
-  register_with_claude "${INSTALL_DIR}/${BIN_NAME}"
+  register_with_claude "${INSTALL_DIR}/${bin_file}"
 }
 
 main "$@"

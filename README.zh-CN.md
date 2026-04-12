@@ -19,8 +19,9 @@ curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install
 脚本会把对应平台的二进制下载到 `~/.local/bin`；如果你装了 Claude Code，
 还会顺手帮你注册成用户级 MCP 服务器。重启一下 Claude Code 就能用了。
 
-支持平台：linux amd64/arm64、macOS amd64/arm64、Windows amd64（Windows
-请去 [releases 页面](https://github.com/0xZOne/perfetto-mcp-rs/releases)
+支持平台：linux amd64/arm64、macOS amd64/arm64、Windows amd64
+（Windows 上在 **Git Bash / MSYS2 / Cygwin** 里跑上面的 one-liner
+就行，或者去 [releases 页面](https://github.com/0xZOne/perfetto-mcp-rs/releases)
 直接下 `.exe`）。
 
 ## 工具
