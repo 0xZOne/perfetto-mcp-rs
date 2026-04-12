@@ -109,9 +109,20 @@ function Install-PerfettoMcp {
         return
     }
 
-    & claude mcp remove perfetto-mcp-rs --scope user 2>$null | Out-Null
-    & claude mcp add perfetto-mcp-rs --scope user $claudePath 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) {
+    # First-install `claude mcp remove` legitimately exits non-zero (nothing
+    # to remove). Under PS 7.4+ with $ErrorActionPreference='Stop', the
+    # $PSNativeCommandUseErrorActionPreference default promotes that non-zero
+    # exit to a terminating error and kills the script before `add` runs.
+    # Relax EAP for the native calls and merge their stderr into stdout so
+    # any complaint is fully swallowed.
+    $savedEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    try { & claude mcp remove perfetto-mcp-rs --scope user 2>&1 | Out-Null } catch {}
+    try { & claude mcp add perfetto-mcp-rs --scope user $claudePath 2>&1 | Out-Null } catch {}
+    $addExit = $LASTEXITCODE
+    $ErrorActionPreference = $savedEAP
+
+    if ($addExit -eq 0) {
         _info "registered with Claude Code (user scope). Restart Claude Code to pick it up."
     } else {
         _warn "failed to register with Claude Code. Run manually:"
