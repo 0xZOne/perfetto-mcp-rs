@@ -56,11 +56,41 @@ resolve_version() {
     | sed 's/.*"\([^"]*\)"$/\1/'
 }
 
+add_to_user_path_windows() {
+  # Append INSTALL_DIR to the user-level Windows PATH via PowerShell. The
+  # .NET SetEnvironmentVariable call writes to HKCU\Environment and
+  # broadcasts WM_SETTINGCHANGE, so new processes (including the next
+  # Claude Code launch) see the update without a reboot.
+  dir_msys="$1"
+  dir_win="$(cygpath -m "$dir_msys")"
+  if ! command -v powershell.exe >/dev/null 2>&1; then
+    warn "powershell.exe not found; add ${dir_win} to PATH manually"
+    return
+  fi
+  result="$(PERFETTO_TARGET_DIR="$dir_win" powershell.exe -NoProfile -NonInteractive -Command '
+    $target = $env:PERFETTO_TARGET_DIR
+    $current = [Environment]::GetEnvironmentVariable("PATH", "User")
+    if ($null -eq $current) { $current = "" }
+    $parts = $current -split ";" | Where-Object { $_ -ne "" }
+    if ($parts -contains $target) { Write-Output "already"; exit 0 }
+    $new = if ($current) { "$current;$target" } else { $target }
+    [Environment]::SetEnvironmentVariable("PATH", $new, "User")
+    Write-Output "added"
+  ' 2>/dev/null | tr -d '\r')"
+  case "$result" in
+    already) info "${dir_win} is already on your Windows user PATH" ;;
+    added)   info "Added ${dir_win} to your Windows user PATH (new terminals and apps will see it; restart Claude Code)" ;;
+    *)       warn "Failed to update Windows PATH; add ${dir_win} manually via System Properties → Environment Variables" ;;
+  esac
+}
+
 register_with_claude() {
   bin_path="$1"
-  # claude.exe on Windows wants a native path, not /c/Users/... from MSYS.
+  # claude.exe on Windows wants a Windows-form path, not /c/Users/... from
+  # MSYS. `cygpath -m` emits forward slashes (C:/Users/...), which Windows
+  # APIs accept and which avoids backslash-escaping hazards in JSON.
   if command -v cygpath >/dev/null 2>&1; then
-    bin_path="$(cygpath -w "$bin_path")"
+    bin_path="$(cygpath -m "$bin_path")"
   fi
   if ! command -v claude >/dev/null 2>&1; then
     cat <<EOF
@@ -116,13 +146,20 @@ main() {
   case ":$PATH:" in
     *":${INSTALL_DIR}:"*) ;;
     *)
-      cat <<EOF
+      case "$platform" in
+        windows-*)
+          add_to_user_path_windows "$INSTALL_DIR"
+          ;;
+        *)
+          cat <<EOF
 
 NOTE: ${INSTALL_DIR} is not on your PATH. Add this to your shell rc:
 
     export PATH="${INSTALL_DIR}:\$PATH"
 
 EOF
+          ;;
+      esac
       ;;
   esac
 
