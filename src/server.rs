@@ -126,9 +126,17 @@ impl PerfettoMcpServer {
         let client = self.client_for(&params.trace_path).await?;
 
         let rows = client.query(&params.sql).await.map_err(|e| match e {
+            // Nudge only on missing-table — column errors would add noise.
+            PerfettoError::QueryError(msg) if msg.contains("no such table:") => format!(
+                "SQL error: {msg}\n\nHint: Call `list_tables` to find the correct table \
+                 name, then `table_structure` on it before retrying. Stdlib tables \
+                 (e.g. `chrome_scroll_update_info`) require `INCLUDE PERFETTO MODULE ...;` \
+                 first."
+            ),
             PerfettoError::QueryError(msg) => format!("SQL error: {msg}"),
-            PerfettoError::TooManyRows => "Query returned more than 5000 rows. Add a LIMIT clause \
-                     or narrow your WHERE condition."
+            PerfettoError::TooManyRows => "Query returned more than 5000 rows. Results should \
+                     be aggregates (COUNT, SUM, AVG, GROUP BY) rather than raw rows. Add \
+                     aggregation, or narrow with a WHERE filter, or add a LIMIT."
                 .to_owned(),
             other => format!("Query failed: {other}"),
         })?;
@@ -157,8 +165,15 @@ impl PerfettoMcpServer {
                      ORDER BY name"
                 )
             }
+            // Hide internal stdlib tables (leading `_`) and SQLite metadata —
+            // they crowd the LLM's context with rows it should never query
+            // directly. Explicit patterns go through the other branch and
+            // remain unfiltered as an escape hatch.
             None => "SELECT name FROM sqlite_master \
-                     WHERE type IN ('table', 'view') ORDER BY name"
+                     WHERE type IN ('table', 'view') \
+                     AND name NOT LIKE 'sqlite_%' \
+                     AND name NOT LIKE '\\_%' ESCAPE '\\' \
+                     ORDER BY name"
                 .to_owned(),
         };
 
