@@ -13,6 +13,7 @@ use crate::query::decode_query_result;
 /// HTTP client for a single trace_processor_shell RPC instance.
 #[derive(Clone, Debug)]
 pub struct TraceProcessorClient {
+    port: u16,
     base_url: String,
     http: reqwest::Client,
 }
@@ -25,9 +26,15 @@ impl TraceProcessorClient {
             .build()
             .expect("failed to build HTTP client");
         Self {
+            port,
             base_url: format!("http://localhost:{port}"),
             http,
         }
+    }
+
+    /// Return the port this client targets.
+    pub fn port(&self) -> u16 {
+        self.port
     }
 
     /// Execute a SQL query and return decoded JSON rows.
