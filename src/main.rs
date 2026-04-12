@@ -19,6 +19,10 @@ pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/perfetto.protos.rs"));
 }
 
+pub mod error;
+pub mod query;
+pub mod tp_client;
+
 fn main() {
     let args = Args::parse();
     eprintln!(
