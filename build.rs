@@ -3,11 +3,14 @@
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Use PROTOC env var if set, otherwise fall back to system protoc.
-    if std::env::var("PROTOC").is_err() {
-        // Check common Chromium checkout location.
-        let chromium_protoc = concat!(env!("HOME"), "/chromium/src/out/Default/protoc");
-        if std::path::Path::new(chromium_protoc).exists() {
-            std::env::set_var("PROTOC", chromium_protoc);
+    if std::env::var_os("PROTOC").is_none() {
+        // Convenience: check common Chromium checkout location on Unix.
+        if let Some(home) = std::env::var_os("HOME") {
+            let chromium_protoc =
+                std::path::Path::new(&home).join("chromium/src/out/Default/protoc");
+            if chromium_protoc.exists() {
+                std::env::set_var("PROTOC", chromium_protoc);
+            }
         }
     }
 
