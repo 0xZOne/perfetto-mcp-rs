@@ -96,7 +96,6 @@ impl Drop for TraceProcessorInstance {
 /// with LRU eviction when the pool exceeds `max_instances`.
 pub struct TraceProcessorManager {
     inner: Mutex<ManagerInner>,
-    // Resolved lazily so the MCP handshake completes before any binary download.
     binary_path: OnceCell<PathBuf>,
 }
 
@@ -117,25 +116,25 @@ impl TraceProcessorManager {
     /// Create a new manager that lazily resolves `trace_processor_shell` on
     /// the first `get_client` call.
     pub fn new(max_instances: usize) -> Self {
-        Self::build(max_instances, OnceCell::new())
-    }
-
-    /// Create a manager with a pre-resolved binary path (used by tests to
-    /// avoid any download or PATH lookup).
-    #[cfg(test)]
-    pub fn new_with_binary(binary_path: PathBuf, max_instances: usize) -> Self {
-        Self::build(max_instances, OnceCell::new_with(Some(binary_path)))
-    }
-
-    fn build(max_instances: usize, binary_path: OnceCell<PathBuf>) -> Self {
         let cap = NonZeroUsize::new(max_instances).unwrap_or(NonZeroUsize::MIN);
         Self {
             inner: Mutex::new(ManagerInner {
                 instances: LruCache::new(cap),
                 next_port: 9001,
             }),
-            binary_path,
+            binary_path: OnceCell::new(),
         }
+    }
+
+    /// Create a manager with a pre-resolved binary path (tests only, avoids
+    /// any download or PATH lookup).
+    #[cfg(test)]
+    pub fn new_with_binary(binary_path: PathBuf, max_instances: usize) -> Self {
+        let this = Self::new(max_instances);
+        this.binary_path
+            .set(binary_path)
+            .expect("binary_path not yet initialized");
+        this
     }
 
     /// Resolve `trace_processor_shell`, downloading it on first call if needed.
@@ -159,7 +158,7 @@ impl TraceProcessorManager {
     /// respawned. If the cache is full, the least recently used instance
     /// is evicted (its process is killed via `kill_on_drop`).
     pub async fn get_client(&self, trace_path: &Path) -> Result<TraceProcessorClient> {
-        let binary = self.ensure_binary().await?.to_path_buf();
+        let binary = self.ensure_binary().await?;
 
         let canonical = trace_path
             .canonicalize()
@@ -186,7 +185,7 @@ impl TraceProcessorManager {
         };
 
         // Spawn without holding the lock; this can take seconds.
-        let instance = TraceProcessorInstance::spawn(&binary, &canonical, port).await?;
+        let instance = TraceProcessorInstance::spawn(binary, &canonical, port).await?;
         let client = instance.client.clone();
 
         // A concurrent task may have inserted an entry for the same trace
