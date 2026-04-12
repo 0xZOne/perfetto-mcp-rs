@@ -1,5 +1,7 @@
 # perfetto-mcp-rs
 
+**English** | [简体中文](README.zh-CN.md)
+
 An [MCP](https://modelcontextprotocol.io) server for analyzing
 [Perfetto](https://perfetto.dev) traces with LLMs. Point Claude Code (or any
 MCP client) at a `.perfetto-trace` / `.pftrace` file and query it with
