@@ -731,9 +731,22 @@ Google 的 `maximumRemoteCalls: 20` 是 `@google/genai` SDK 的 agentic loop 上
 
 **结论**：不适用，无需改动。这个值在 Claude Code / Claude Desktop 等客户端有对应的"工具调用次数上限" / "用户必须 approve 的频率"等设置，是客户端层的问题。
 
-### 7.7 bigint 精度丢失（观察项）
+### 7.7 bigint 精度（已审计，无问题）
 
-Google 的 `resultToJson` 里直接 `Number(value)` —— 对 Perfetto 纳秒时间戳会丢精度。看 `perfetto-mcp-rs/src/query.rs` 有没有类似问题。**这是个 TODO**，不是即时改动。
+Google 的 `resultToJson` 里直接 `Number(value)` —— 对 Perfetto 纳秒时间戳会丢精度（JS `Number` 是 f64，2^53 以上开始截断，≈100 天就会溢出安全整数范围）。
+
+`perfetto-mcp-rs/src/query.rs:42-44` 的对应路径：
+
+```rust
+Ok(CellType::CellVarint) => {
+    let v = varint_iter.next().copied().unwrap_or(0);
+    Value::Number(serde_json::Number::from(v))
+}
+```
+
+`varint_iter` 来自 protobuf 字段 `varint_cells: Vec<i64>`，`serde_json::Number::from(i64)` 直接把 i64 存进原生 i64 variant——**不经过 f64，完整保留 63 位有效位**。Perfetto 时间戳的理论上限 2^63 ≈ 9.2e18 ns ≈ 292 年，在 `perfetto-mcp-rs` 这条路径上是无损的。
+
+相对 Google 插件这算是一个**隐式的正确性优势**：Rust 项目走强类型 i64 链路，不会像 JS 侧那样在边界情况下静默截断。**无需修改**。
 
 ---
 
@@ -989,13 +1002,13 @@ for (let step = 0; step < 20; step++) {
 
 ## 附录 B. 对照到 `perfetto-mcp-rs` 的改动清单
 
-| # | 改动 | 文件:行 | ROI | 建议动作 |
+| # | 改动 | 文件 | ROI | 状态 |
 |---|---|---|---|---|
-| 1 | `list_tables` 过滤 `_*` 前缀 | `src/server.rs:166-170` | ⭐⭐⭐ | 立即改 |
-| 2 | `TooManyRows` 错误消息改为建议聚合 | `src/server.rs:137-139` | ⭐⭐⭐ | 立即改 |
-| 3 | `execute_sql` description 加 stdlib docs URL | `src/server.rs:117-121` | ⭐⭐ | 待讨论（token 成本） |
-| 4 | 新增 `list_processes` 领域工具 | `src/server.rs`（新 tool） | ⭐⭐ | 先观察现状再决策 |
-| 5 | `list_threads_in_process` | `src/server.rs`（新 tool） | ⭐ | 配合 #4 |
-| 6 | `chrome_scroll_jank_summary` | `src/server.rs`（新 tool） | ⭐ | 观察 Chrome trace 用户需求 |
-| 7 | 检查 `query.rs` 的 bigint 精度处理 | `src/query.rs` | 观察 | 未必是问题 |
-| 8 | README 注明 "works best with agentic MCP clients" | `README.md` | ⭐ | 小改 |
+| 1 | `list_tables` 过滤 `_*` 前缀 | `src/server.rs` | ⭐⭐⭐ | 已落地（commit `8bf9197`） |
+| 2 | `TooManyRows` 错误消息改为建议聚合 | `src/server.rs` | ⭐⭐⭐ | 已落地（commit `8bf9197`） |
+| 3 | `execute_sql` description 加 stdlib docs URL（单行单 URL 的节俭版） | `src/server.rs` | ⭐⭐ | 已落地 |
+| 4 | 新增 `list_processes` 领域工具 | `src/server.rs` | ⭐⭐ | 已落地 |
+| 5 | 新增 `list_threads_in_process` 领域工具 | `src/server.rs` | ⭐ | 已落地 |
+| 6 | 新增 `chrome_scroll_jank_summary` 领域工具 | `src/server.rs` | ⭐ | 已落地 |
+| 7 | 检查 `query.rs` 的 bigint 精度处理 | `src/query.rs` | 观察 | 已审计——i64 通过 `serde_json::Number::from(i64)` 无损传递，不经 f64。无需修改。详见 §7.7。 |
+| 8 | README 注明 "works best with agentic MCP clients" | `README.md` | ⭐ | 未落地（小改，可跟进） |
