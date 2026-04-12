@@ -187,10 +187,7 @@ impl PerfettoMcpServer {
                      ORDER BY name"
                 )
             }
-            // Hide internal stdlib tables (leading `_`) and SQLite metadata —
-            // they crowd the LLM's context with rows it should never query
-            // directly. Explicit patterns go through the other branch and
-            // remain unfiltered as an escape hatch.
+            // Hide internal stdlib tables (`_*`) — explicit patterns still bypass the filter.
             None => "SELECT name FROM sqlite_master \
                      WHERE type IN ('table', 'view') \
                      AND name NOT LIKE 'sqlite_%' \
@@ -271,10 +268,11 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "list_threads_in_process",
-        description = "List all threads belonging to processes matching a given name, \
-                       returning tid, thread_name, pid, and upid for each. Handles the \
-                       common case of multiple processes sharing a name (e.g. Chrome \
-                       renderer forks). Use list_processes first to find the exact name."
+        description = "List up to 2000 threads belonging to processes matching a given \
+                       name, returning tid, thread_name, pid, and upid for each. Handles \
+                       the common case of multiple processes sharing a name (e.g. Chrome \
+                       renderer forks). Use list_processes first to find the exact name; \
+                       if the cap is hit, drill down by pid with execute_sql."
     )]
     async fn list_threads_in_process(
         &self,
@@ -282,18 +280,22 @@ impl PerfettoMcpServer {
     ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
         let name_lit = sql_string_literal(&params.process_name).map_err(|e| e.to_string())?;
+        // LIMIT keeps us clear of the 5000-row hard cap on Chrome renderer-fork
+        // and Android system_server traces where a single process name can
+        // fan out to thousands of threads.
         let sql = format!(
             "SELECT t.tid, t.name AS thread_name, p.pid, p.upid \
              FROM thread t JOIN process p ON t.upid = p.upid \
              WHERE p.name = {name_lit} \
-             ORDER BY p.pid, t.tid"
+             ORDER BY p.pid, t.tid \
+             LIMIT 2000"
         );
         let rows = client
             .query(&sql)
             .await
             .map_err(|e| format!("Failed to list threads: {e}"))?;
         if rows.is_empty() {
-            return Ok(format!(
+            return Err(format!(
                 "No threads found for process name {:?}. Call list_processes \
                  to see available process names.",
                 params.process_name
@@ -321,11 +323,21 @@ impl PerfettoMcpServer {
                    GROUP BY cause_of_jank \
                    ORDER BY jank_count DESC";
         let rows = client.query(sql).await.map_err(|e| match e {
-            PerfettoError::QueryError(msg) => format!(
-                "Failed to run Chrome scroll jank summary: {msg}\n\nHint: this tool \
-                 requires a Chrome trace with scroll data. For non-Chrome traces, use \
-                 execute_sql with a different query."
-            ),
+            // Only nudge "wrong trace type" when the error actually looks like
+            // a missing-table/module — otherwise a real SQL bug would be
+            // hidden behind an irrelevant hint.
+            PerfettoError::QueryError(msg)
+                if msg.contains("no such table") || msg.contains("Module not found") =>
+            {
+                format!(
+                    "Failed to run Chrome scroll jank summary: {msg}\n\nHint: this tool \
+                     requires a Chrome trace with scroll data. For non-Chrome traces, \
+                     use execute_sql with a different query."
+                )
+            }
+            PerfettoError::QueryError(msg) => {
+                format!("Failed to run Chrome scroll jank summary: {msg}")
+            }
             other => format!("Failed: {other}"),
         })?;
         if rows.is_empty() {
@@ -434,8 +446,6 @@ mod tests {
 
     #[test]
     fn sql_string_literal_doubles_single_quotes() {
-        // The escaped form is a literal SQL string equal to the original —
-        // `'''; DROP--'` is a single-quoted literal whose content is `'; DROP--`.
         assert_eq!(sql_string_literal("Mike's App").unwrap(), "'Mike''s App'");
         assert_eq!(sql_string_literal("'; DROP--").unwrap(), "'''; DROP--'");
     }
