@@ -12,17 +12,26 @@ manual Perfetto install required.
 
 ## Quick install
 
+**Linux / macOS / Windows (Git Bash, MSYS2, Cygwin):**
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh
 ```
 
-This downloads the prebuilt binary for your platform to `~/.local/bin` and, if
-Claude Code is installed, registers it as a user-scope MCP server. Restart
-Claude Code to pick it up.
+**Windows (PowerShell):**
 
-Supported platforms: linux amd64/arm64, macOS amd64/arm64, Windows amd64
-(run the one-liner above from **Git Bash / MSYS2 / Cygwin**, or download the
-`.exe` directly from the [releases page](https://github.com/0xZOne/perfetto-mcp-rs/releases)).
+```powershell
+irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.ps1 | iex
+```
+
+Both installers drop the prebuilt binary into `~/.local/bin` (or
+`%USERPROFILE%\.local\bin` on Windows), add it to your user PATH if needed,
+and — if Claude Code is installed — register it as a user-scope MCP server.
+Restart Claude Code to pick it up.
+
+Supported platforms: linux amd64/arm64, macOS amd64/arm64, Windows amd64.
+If you'd rather not run a script, grab the binary directly from the
+[releases page](https://github.com/0xZOne/perfetto-mcp-rs/releases).
 
 ## Tools
 

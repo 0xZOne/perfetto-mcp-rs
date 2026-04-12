@@ -12,17 +12,25 @@ Perfetto。
 
 ## 快速安装
 
+**Linux / macOS / Windows（Git Bash、MSYS2、Cygwin）：**
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh
 ```
 
-脚本会把对应平台的二进制下载到 `~/.local/bin`；如果你装了 Claude Code，
-还会顺手帮你注册成用户级 MCP 服务器。重启一下 Claude Code 就能用了。
+**Windows（PowerShell）：**
 
-支持平台：linux amd64/arm64、macOS amd64/arm64、Windows amd64
-（Windows 上在 **Git Bash / MSYS2 / Cygwin** 里跑上面的 one-liner
-就行，或者去 [releases 页面](https://github.com/0xZOne/perfetto-mcp-rs/releases)
-直接下 `.exe`）。
+```powershell
+irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.ps1 | iex
+```
+
+两种安装方式都会把二进制下载到 `~/.local/bin`（Windows 上是
+`%USERPROFILE%\.local\bin`），自动加到用户 PATH 里；如果你装了 Claude
+Code，还会顺手注册成用户级 MCP 服务器。重启一下 Claude Code 就能用了。
+
+支持平台：linux amd64/arm64、macOS amd64/arm64、Windows amd64。
+不想跑脚本的话，直接去 [releases 页面](https://github.com/0xZOne/perfetto-mcp-rs/releases)
+下对应平台的二进制也行。
 
 ## 工具
 
