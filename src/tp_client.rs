@@ -13,7 +13,6 @@ use crate::query::decode_query_result;
 /// HTTP client for a single trace_processor_shell RPC instance.
 #[derive(Clone, Debug)]
 pub struct TraceProcessorClient {
-    port: u16,
     base_url: String,
     http: reqwest::Client,
 }
@@ -26,15 +25,9 @@ impl TraceProcessorClient {
             .build()
             .expect("failed to build HTTP client");
         Self {
-            port,
             base_url: format!("http://localhost:{port}"),
             http,
         }
-    }
-
-    /// Return the port this client targets.
-    pub fn port(&self) -> u16 {
-        self.port
     }
 
     /// Execute a SQL query and return decoded JSON rows.
@@ -70,17 +63,6 @@ impl TraceProcessorClient {
 
         let bytes = resp.bytes().await?;
         Ok(StatusResult::decode(bytes)?)
-    }
-
-    /// Reset trace_processor state to initial tables (clears any
-    /// user-created views/tables from previous queries).
-    pub async fn restore_initial_tables(&self) -> Result<(), PerfettoError> {
-        self.http
-            .post(format!("{}/restore_initial_tables", self.base_url))
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
     }
 }
 

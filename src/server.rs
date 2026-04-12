@@ -1,7 +1,7 @@
 // Copyright 2025 The perfetto-mcp-rs Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 
 use rmcp::{
@@ -97,12 +97,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<LoadTraceParams>,
     ) -> Result<String, String> {
-        let path = PathBuf::from(&params.trace_path);
-        let client = self
-            .manager
-            .get_client(&path)
-            .await
-            .map_err(|e| format!("Failed to load trace: {e}"))?;
+        let client = self.client_for(&params.trace_path).await?;
 
         let status = client
             .status()
@@ -130,12 +125,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ExecuteSqlParams>,
     ) -> Result<String, String> {
-        let path = PathBuf::from(&params.trace_path);
-        let client = self
-            .manager
-            .get_client(&path)
-            .await
-            .map_err(|e| format!("Failed to get trace client: {e}"))?;
+        let client = self.client_for(&params.trace_path).await?;
 
         let rows = client
             .query(&params.sql)
@@ -164,33 +154,20 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ListTablesParams>,
     ) -> Result<String, String> {
-        let path = PathBuf::from(&params.trace_path);
-        let client = self
-            .manager
-            .get_client(&path)
-            .await
-            .map_err(|e| format!("Failed to get trace client: {e}"))?;
+        let client = self.client_for(&params.trace_path).await?;
 
         let sql = match &params.pattern {
             Some(pat) => {
-                let safe = sanitize_glob_param(pat)
-                    .map_err(|e| e.to_string())?;
+                let safe = sanitize_glob_param(pat).map_err(|e| e.to_string())?;
                 format!(
-                    "SELECT name FROM (SELECT name FROM sqlite_master \
-                     WHERE type IN ('table', 'view') \
-                     UNION ALL \
-                     SELECT name FROM perfetto_tables()) \
-                     WHERE name GLOB '{safe}' ORDER BY name"
+                    "SELECT name FROM sqlite_master \
+                     WHERE type IN ('table', 'view') AND name GLOB '{safe}' \
+                     ORDER BY name"
                 )
             }
-            None => {
-                "SELECT name FROM (SELECT name FROM sqlite_master \
-                 WHERE type IN ('table', 'view') \
-                 UNION ALL \
-                 SELECT name FROM perfetto_tables()) \
-                 ORDER BY name"
-                    .to_owned()
-            }
+            None => "SELECT name FROM sqlite_master \
+                     WHERE type IN ('table', 'view') ORDER BY name"
+                .to_owned(),
         };
 
         let rows = client
@@ -219,16 +196,8 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<TableStructureParams>,
     ) -> Result<String, String> {
-        let path = PathBuf::from(&params.trace_path);
-        let client = self
-            .manager
-            .get_client(&path)
-            .await
-            .map_err(|e| format!("Failed to get trace client: {e}"))?;
-
-        // Validate table name to prevent SQL injection.
-        let table = sanitize_glob_param(&params.table_name)
-            .map_err(|e| e.to_string())?;
+        let client = self.client_for(&params.trace_path).await?;
+        let table = sanitize_glob_param(&params.table_name).map_err(|e| e.to_string())?;
 
         let sql = format!("PRAGMA table_info('{table}')");
         let rows = client
@@ -269,6 +238,17 @@ impl PerfettoMcpServer {
         let service = self.serve(transport).await?;
         service.waiting().await?;
         Ok(())
+    }
+
+    /// Resolve a user-provided trace path to a cached client.
+    async fn client_for(
+        &self,
+        trace_path: &str,
+    ) -> Result<crate::tp_client::TraceProcessorClient, String> {
+        self.manager
+            .get_client(Path::new(trace_path))
+            .await
+            .map_err(|e| format!("Failed to open trace {trace_path:?}: {e}"))
     }
 }
 

@@ -146,59 +146,40 @@ impl TraceProcessorManager {
             .canonicalize()
             .with_context(|| format!("trace file not found: {}", trace_path.display()))?;
 
-        // Fast path: check if already cached and alive.
-        {
+        let port = {
             let mut inner = self.inner.lock().await;
             if let Some(inst) = inner.instances.get_mut(&canonical) {
                 if inst.is_alive() {
                     return Ok(inst.client.clone());
                 }
-                // Dead process — remove and respawn below.
                 tracing::warn!(
                     "trace_processor_shell on port {} died, respawning",
                     inst.port,
                 );
                 inner.instances.pop(&canonical);
             }
-        }
-
-        // Slow path: spawn a new instance (without holding the lock).
-        let port;
-        {
-            let mut inner = self.inner.lock().await;
-            port = inner.next_port;
+            let port = inner.next_port;
             inner.next_port = inner.next_port.wrapping_add(1);
             if inner.next_port < 9001 {
                 inner.next_port = 9001;
             }
-        }
+            port
+        };
 
+        // Spawn without holding the lock; this can take seconds.
         let instance =
             TraceProcessorInstance::spawn(&self.binary_path, &canonical, port)
                 .await?;
         let client = instance.client.clone();
 
-        // Insert into cache (may evict LRU entry, killing its process).
-        {
-            let mut inner = self.inner.lock().await;
-            // Double-check: another task may have inserted while we spawned.
-            if let Some(existing) = inner.instances.get(&canonical) {
-                if existing.client.port() == client.port() {
-                    return Ok(client);
-                }
-                // Use the existing one, drop our new spawn.
-                return Ok(existing.client.clone());
-            }
-            inner.instances.put(canonical, instance);
-        }
-
-        Ok(client)
-    }
-
-    /// Shut down all managed instances.
-    pub async fn shutdown(&self) {
+        // A concurrent task may have inserted an entry for the same trace
+        // while we were spawning. If so, reuse theirs and drop ours.
         let mut inner = self.inner.lock().await;
-        inner.instances.clear();
+        if let Some(existing) = inner.instances.get(&canonical) {
+            return Ok(existing.client.clone());
+        }
+        inner.instances.put(canonical, instance);
+        Ok(client)
     }
 }
 

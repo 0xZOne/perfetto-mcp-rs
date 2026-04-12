@@ -27,21 +27,15 @@ pub fn decode_query_result(result: &QueryResult) -> Result<Vec<Value>, PerfettoE
     let mut rows: Vec<Value> = Vec::new();
 
     for batch in &result.batch {
-        // Per-type cursors within this batch.
-        let mut varint_idx: usize = 0;
-        let mut float64_idx: usize = 0;
-        let mut blob_idx: usize = 0;
-
-        // string_cells is a single NUL-delimited string.
-        let string_parts: Vec<&str> = batch
+        let mut varint_iter = batch.varint_cells.iter();
+        let mut float64_iter = batch.float64_cells.iter();
+        let mut blob_iter = batch.blob_cells.iter();
+        let mut string_iter = batch
             .string_cells
             .as_deref()
             .unwrap_or("")
-            .split('\0')
-            .collect();
-        let mut string_idx: usize = 0;
+            .split('\0');
 
-        // Column index within the current row.
         let mut col_idx: usize = 0;
         let mut current_row = serde_json::Map::with_capacity(num_cols);
 
@@ -50,29 +44,20 @@ pub fn decode_query_result(result: &QueryResult) -> Result<Vec<Value>, PerfettoE
             let value = match CellType::try_from(cell_type_raw) {
                 Ok(CellType::CellNull) | Ok(CellType::CellInvalid) => Value::Null,
                 Ok(CellType::CellVarint) => {
-                    let v = batch.varint_cells.get(varint_idx).copied().unwrap_or(0);
-                    varint_idx += 1;
+                    let v = varint_iter.next().copied().unwrap_or(0);
                     Value::Number(serde_json::Number::from(v))
                 }
                 Ok(CellType::CellFloat64) => {
-                    let v = batch.float64_cells.get(float64_idx).copied().unwrap_or(0.0);
-                    float64_idx += 1;
+                    let v = float64_iter.next().copied().unwrap_or(0.0);
                     serde_json::Number::from_f64(v)
                         .map(Value::Number)
                         .unwrap_or(Value::Null)
                 }
                 Ok(CellType::CellString) => {
-                    let s = string_parts
-                        .get(string_idx)
-                        .copied()
-                        .unwrap_or("");
-                    string_idx += 1;
-                    Value::String(s.to_owned())
+                    Value::String(string_iter.next().unwrap_or("").to_owned())
                 }
                 Ok(CellType::CellBlob) => {
-                    let b = batch.blob_cells.get(blob_idx).cloned().unwrap_or_default();
-                    blob_idx += 1;
-                    // Encode blob as base64 string for JSON compatibility.
+                    let b = blob_iter.next().map(Vec::as_slice).unwrap_or(&[]);
                     Value::String(format!("<blob {} bytes>", b.len()))
                 }
                 Err(_) => Value::Null,
