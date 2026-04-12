@@ -7,10 +7,16 @@
 #   $env:INSTALL_DIR   Where to place the binary (default: $HOME\.local\bin)
 #   $env:REPO          GitHub slug to download from (default: 0xZOne/perfetto-mcp-rs)
 #   $env:VERSION       Release tag to install (default: latest)
+#
+# Written to run under both FullLanguage and ConstrainedLanguage PowerShell
+# modes — uses cmdlets instead of .NET static methods wherever possible so
+# enterprise AppLocker / WDAC lockdowns don't break the installer.
 
 function Install-PerfettoMcp {
     $ErrorActionPreference = 'Stop'
-    # Old Windows defaults (TLS 1.0) can't talk to github.com; force TLS 1.2.
+    # Old Windows defaulted to TLS 1.0 which github.com rejects. Wrapped in
+    # try/catch because this is a non-core static property set — CLM blocks
+    # it, and Windows 10/11's TLS 1.2+ default is fine without it.
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
     $repo       = if ($env:REPO)        { $env:REPO }        else { '0xZOne/perfetto-mcp-rs' }
@@ -30,8 +36,8 @@ function Install-PerfettoMcp {
         _fail "only windows-amd64 is released; detected '$arch'"
     }
 
-    # `releases/latest/download/<asset>` redirects to the latest release asset
-    # without an API call, which dodges the GitHub anonymous rate limit.
+    # `releases/latest/download/<asset>` redirects to the latest release
+    # without an API call, avoiding the GitHub anonymous rate limit.
     $url = if ($version -eq 'latest') {
         "https://github.com/$repo/releases/latest/download/$asset"
     } else {
@@ -43,16 +49,19 @@ function Install-PerfettoMcp {
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
     $dest = Join-Path $installDir $binName
 
-    # Best-effort sweep of aside files left by prior installs. They can only
-    # be deleted once the old claude subprocess holding them has exited.
-    Get-ChildItem -LiteralPath $installDir -Filter "$binName.old-*" -ErrorAction SilentlyContinue |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    # Sweep aside files left by prior installs. -Name makes Get-ChildItem
+    # return plain filename strings instead of FileInfo objects, which
+    # avoids any property access on a non-core type.
+    $asides = @(Get-ChildItem -LiteralPath $installDir -Filter "$binName.old-*" -Name -ErrorAction SilentlyContinue)
+    foreach ($name in $asides) {
+        Remove-Item -LiteralPath (Join-Path $installDir $name) -Force -ErrorAction SilentlyContinue
+    }
 
-    # Windows holds a DELETE lock on a running .exe, so we can't overwrite or
-    # unlink it — but MoveFile is allowed on locked files. Rename aside so
-    # the download target is free; the aside is cleaned up next install.
+    # Windows holds a DELETE lock on a running .exe, so we can't overwrite
+    # or unlink it — but MoveFile is allowed on locked files. Rename aside
+    # so the download target is free; the aside is cleaned up next install.
     if (Test-Path -LiteralPath $dest) {
-        $aside = "$dest.old-$([DateTimeOffset]::Now.ToUnixTimeSeconds())"
+        $aside = "$dest.old-$(Get-Random)"
         try {
             Move-Item -LiteralPath $dest -Destination $aside -Force -ErrorAction Stop
         } catch {
@@ -63,22 +72,28 @@ function Install-PerfettoMcp {
     try {
         Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
     } catch {
-        _fail "download failed: $url ($($_.Exception.Message))"
+        _fail "download failed: $url"
     }
     _info "installed to $dest"
 
-    # Idempotent user-PATH update. SetEnvironmentVariable(User) writes
-    # HKCU\Environment and broadcasts WM_SETTINGCHANGE, so new processes pick
-    # it up without logout; the current session still needs to reload.
-    $current = [Environment]::GetEnvironmentVariable('PATH', 'User')
+    # Idempotent user-PATH update. CLM forbids
+    # [Environment]::SetEnvironmentVariable, but the registry provider
+    # cmdlets work. Side effect: we don't broadcast WM_SETTINGCHANGE, so
+    # only newly launched terminals see the update — acceptable because
+    # `claude mcp add` registers the absolute path anyway.
+    $current = (Get-ItemProperty -Path 'HKCU:\Environment' -Name PATH -ErrorAction SilentlyContinue).PATH
     if ($null -eq $current) { $current = '' }
     $parts = $current -split ';' | Where-Object { $_ -ne '' }
     if ($parts -contains $installDir) {
         _info "$installDir is already on your user PATH"
     } else {
         $new = if ($current) { "$current;$installDir" } else { $installDir }
-        [Environment]::SetEnvironmentVariable('PATH', $new, 'User')
-        _info "added $installDir to your user PATH (new terminals will see it)"
+        try {
+            New-ItemProperty -Path 'HKCU:\Environment' -Name PATH -Value $new -PropertyType ExpandString -Force -ErrorAction Stop | Out-Null
+            _info "added $installDir to your user PATH (new terminals will see it)"
+        } catch {
+            _warn "couldn't update your user PATH automatically; add $installDir manually"
+        }
     }
 
     # Forward-slash form avoids backslash-escaping hazards in JSON configs.
