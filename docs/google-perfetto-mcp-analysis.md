@@ -18,7 +18,7 @@
 
 ## 0. TL;DR
 
-- Google embeds a **browser-side, in-process MCP server + MCP client + Gemini client** chat plugin inside the Perfetto UI. Architecturally it is highly similar to `perfetto-mcp-rs`, with both projects converging on the same three core primitives — `query / list-tables / describe-table` — which constitutes an independent validation of this project's design.
+- Google embeds a **browser-side, in-process MCP server + MCP client + Gemini client** chat plugin inside the Perfetto UI.
 - Three details are worth porting directly into `perfetto-mcp-rs`: **filtering out internal tables with the `_*` prefix**, **embedding stdlib documentation URLs into tool descriptions**, and **replacing the existing row-cap error message with "please use aggregates instead"**.
 - Two decisions require deliberation: whether to introduce **domain-specific tools** (Android processes, Macrobenchmark slices, Chrome scroll jank, etc.), and whether to introduce **UI side-effect tools** (only meaningful when integrated with a UI).
 - Replacing Gemini: for `com.google.PerfettoMcp` this constitutes real porting work (the `@google/genai` SDK and the `mcpToTool` bridge are both tight coupling points); for `perfetto-mcp-rs` it is a **non-problem** — this project is a pure MCP server over stdio, and the LLM choice has been fully delegated to the client.
@@ -623,7 +623,7 @@ This is a design that warrants caution — the user perceives "a new conversatio
 
 ### 6.1 Commonalities
 
-1. **The three core primitives coincide**: query + list-tables + describe-table. Both sides arrived at the same design independently.
+1. **The three core primitives are identical**: query + list-tables + describe-table.
 2. **The 5000-row cap coincides.**
 3. **Neither has a schema cache**: every list/describe hits the trace engine afresh.
 4. **Both delegate schema discovery to the LLM**: the schema is not pre-dumped into a system prompt.
@@ -970,7 +970,7 @@ Returning to this project: do we need to do any "switch model" preparation work?
 
 ## 9. Conclusion
 
-`com.google.PerfettoMcp` is a rather elegantly designed Perfetto UI plugin: 746 lines of code achieve **embedded MCP server + Gemini chat + Perfetto trace queries + reverse UI operation**. Its greatest lesson is the **independent validation** it provides for the core design of `perfetto-mcp-rs` — two teams, starting from different paths, converged on the same three primitives (query / list-tables / describe-table), and each chose the same details: a 5000-row cap, JSON output, and an HTTP RPC backend.
+`com.google.PerfettoMcp` is a rather elegantly designed Perfetto UI plugin: 746 lines of code achieve **embedded MCP server + Gemini chat + Perfetto trace queries + reverse UI operation**.
 
 In terms of what is worth adopting, **§7.1 / §7.2** are low-cost improvements that can land immediately; **§7.3** is a medium-ROI UX upgrade; **§7.4** is a product-direction decision. It also exposes an anti-pattern worth guarding against (SQL injection), which `perfetto-mcp-rs` has already avoided.
 

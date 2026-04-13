@@ -18,7 +18,7 @@
 
 ## 0. TL;DR
 
-- Google 在 Perfetto UI 内嵌了一个 **browser-side、同进程 MCP server + MCP client + Gemini 客户端**的聊天插件。架构上与 `perfetto-mcp-rs` 高度相似，核心原语均为 `query / list-tables / describe-table`，可视为对本项目设计的独立验证。
+- Google 在 Perfetto UI 内嵌了一个 **browser-side、同进程 MCP server + MCP client + Gemini 客户端**的聊天插件。
 - 有三处细节值得直接移植到 `perfetto-mcp-rs`：**过滤 `_*` 前缀内部表**、**将 stdlib 文档 URL 写入工具 description**、**用"请改用聚合"替换现有 row-cap 错误文案**。
 - 有两项决策需要权衡：是否新增**领域特化工具**（Android 进程、Macrobenchmark 切片、Chrome scroll jank 等），以及是否新增 **UI 副作用工具**（仅在与 UI 集成时有意义）。
 - 替换 Gemini：对 `com.google.PerfettoMcp` 而言是实实在在的移植工作（`@google/genai` SDK 和 `mcpToTool` 桥接均为强耦合）；对 `perfetto-mcp-rs` 而言则是 **non-problem** —— 本项目是纯 MCP server over stdio，LLM 选择权已完全下放给客户端。
@@ -623,7 +623,7 @@ this.messages = [
 
 ### 6.1 共性
 
-1. **核心三板斧一致**：query + list-tables + describe-table。两边独立达成了相同的设计。
+1. **核心三板斧一致**：query + list-tables + describe-table。
 2. **5000 行上限一致**。
 3. **都没有 schema cache**：每次 list/describe 都打实 trace engine。
 4. **都把 schema 发现交给 LLM**：不预先 dump schema 进 system prompt。
@@ -970,7 +970,7 @@ for (let step = 0; step < 20; step++) {
 
 ## 9. 结论
 
-`com.google.PerfettoMcp` 是一个设计得相当精巧的 Perfetto UI 插件：746 行代码做到了**内嵌 MCP server + Gemini chat + Perfetto trace 查询 + UI 反向操作**。它最大的启示是对 `perfetto-mcp-rs` 的核心设计的**独立验证** —— 两个团队从不同路径到达了同一个三原语（query / list-tables / describe-table），且都选择了 5000 行上限、JSON 输出、HTTP RPC 后端等相同细节。
+`com.google.PerfettoMcp` 是一个设计得相当精巧的 Perfetto UI 插件：746 行代码做到了**内嵌 MCP server + Gemini chat + Perfetto trace 查询 + UI 反向操作**。
 
 在可借鉴层面，**§7.1 / §7.2** 是立即可以落地的低成本改进，**§7.3** 是中等 ROI 的 UX 升级，**§7.4** 是产品方向决策。它也暴露了一个值得警惕的反模式（SQL 注入），这是 `perfetto-mcp-rs` 已经避免的。
 
