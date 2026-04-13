@@ -50,6 +50,9 @@ impl TraceProcessorInstance {
         Ok(instance)
     }
 
+    // TODO(wait_ready): /status can succeed against a foreign process that
+    // already owned this port before our child failed to bind. Needs a PID
+    // or handshake check to confirm we're talking to our own subprocess.
     /// Poll the /status endpoint until the instance is ready.
     async fn wait_ready(&mut self) -> Result<()> {
         for i in 0..50 {
@@ -110,17 +113,28 @@ impl std::fmt::Debug for TraceProcessorManager {
 struct ManagerInner {
     instances: LruCache<PathBuf, TraceProcessorInstance>,
     next_port: u16,
+    starting_port: u16,
 }
 
 impl TraceProcessorManager {
+    pub const DEFAULT_STARTING_PORT: u16 = 9001;
+
     /// Create a new manager that lazily resolves `trace_processor_shell` on
     /// the first `get_client` call.
     pub fn new(max_instances: usize) -> Self {
+        Self::new_with_starting_port(max_instances, Self::DEFAULT_STARTING_PORT)
+    }
+
+    /// Used when the default port range is already in use (e.g. a second
+    /// instance on the same host, or integration tests coexisting with a
+    /// running server).
+    pub fn new_with_starting_port(max_instances: usize, starting_port: u16) -> Self {
         let cap = NonZeroUsize::new(max_instances).unwrap_or(NonZeroUsize::MIN);
         Self {
             inner: Mutex::new(ManagerInner {
                 instances: LruCache::new(cap),
-                next_port: 9001,
+                next_port: starting_port,
+                starting_port,
             }),
             binary_path: OnceCell::new(),
         }
@@ -178,8 +192,8 @@ impl TraceProcessorManager {
             }
             let port = inner.next_port;
             inner.next_port = inner.next_port.wrapping_add(1);
-            if inner.next_port < 9001 {
-                inner.next_port = 9001;
+            if inner.next_port < inner.starting_port {
+                inner.next_port = inner.starting_port;
             }
             port
         };

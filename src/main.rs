@@ -5,6 +5,9 @@ use std::sync::Arc;
 
 use clap::Parser;
 
+use perfetto_mcp_rs::server::PerfettoMcpServer;
+use perfetto_mcp_rs::tp_manager::TraceProcessorManager;
+
 /// Perfetto trace analysis MCP server.
 ///
 /// Provides load_trace, execute_sql, list_tables, and table_structure tools
@@ -16,17 +19,6 @@ struct Args {
     #[arg(long, default_value_t = 3)]
     max_instances: usize,
 }
-
-pub mod proto {
-    include!(concat!(env!("OUT_DIR"), "/perfetto.protos.rs"));
-}
-
-pub mod download;
-pub mod error;
-pub mod query;
-pub mod server;
-pub mod tp_client;
-pub mod tp_manager;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -43,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
         args.max_instances,
     );
 
-    let manager = Arc::new(tp_manager::TraceProcessorManager::new(args.max_instances));
-    let server = server::PerfettoMcpServer::new(manager);
+    let manager = Arc::new(TraceProcessorManager::new(args.max_instances));
+    let server = PerfettoMcpServer::new(manager);
     server.run().await
 }

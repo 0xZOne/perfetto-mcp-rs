@@ -14,18 +14,22 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Cache trace_processor_shell
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/perfetto-mcp-rs
+          key: tp-shell-${{ hashFiles('src/download.rs') }}-${{ runner.os }}
 
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
