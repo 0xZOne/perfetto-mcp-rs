@@ -42,16 +42,27 @@ jobs:
             asset_name: perfetto-mcp-rs-windows-amd64.exe
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install musl tools
-        if: contains(matrix.target, 'musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Install build deps
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux)
+              sudo apt-get update
+              pkgs="protobuf-compiler"
+              if [[ "${{ matrix.target }}" == *musl* ]]; then
+                pkgs="$pkgs musl-tools"
+              fi
+              sudo apt-get install -y $pkgs
+              ;;
+            macOS)
+              brew install protobuf
+              ;;
+            Windows)
+              choco install protoc --no-progress
+              ;;
+          esac
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -73,7 +84,7 @@ jobs:
           fi
           cp "$src" "${{ matrix.asset_name }}"
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: ${{ matrix.asset_name }}
