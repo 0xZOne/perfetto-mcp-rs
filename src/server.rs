@@ -136,10 +136,22 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "execute_sql",
-        description = "Execute a PerfettoSQL query against a loaded trace. Returns results \
-                       as a JSON array of row objects. Maximum 5000 rows returned. The \
-                       trace_path must reference a previously loaded trace. \
-                       Documentation: https://perfetto.dev/docs/analysis/stdlib-docs"
+        description = "Execute a PerfettoSQL query against a loaded trace. Returns a JSON \
+                       array of row objects. Maximum 5000 rows returned — prefer aggregates \
+                       (COUNT, SUM, AVG, GROUP BY) over raw rows. The trace_path must \
+                       reference a previously loaded trace.\n\
+                       IMPORTANT: `INCLUDE PERFETTO MODULE <name>;` must be sent in its own \
+                       execute_sql call, separate from the SELECT that uses it. Combining \
+                       `INCLUDE ...; SELECT ...` into one call silently drops the INCLUDE \
+                       and the SELECT fails with 'no such table'.\n\
+                       Documentation:\n\
+                       - Stdlib index: https://perfetto.dev/docs/analysis/stdlib-docs\n\
+                       - PerfettoSQL syntax: https://perfetto.dev/docs/analysis/perfetto-sql-syntax\n\
+                       - Frame timeline (jank): https://perfetto.dev/docs/data-sources/frametimeline\n\
+                       - CPU scheduling: https://perfetto.dev/docs/data-sources/cpu-scheduling\n\
+                       - Memory counters: https://perfetto.dev/docs/data-sources/memory-counters\n\
+                       - Battery counters (power): https://perfetto.dev/docs/data-sources/battery-counters\n\
+                       - Android logs: https://perfetto.dev/docs/data-sources/android-log"
     )]
     async fn execute_sql(
         &self,
@@ -170,7 +182,12 @@ impl PerfettoMcpServer {
         name = "list_tables",
         description = "List all tables and views available in the loaded trace. Optionally \
                        filter by a GLOB pattern (e.g. 'chrome_*', 'slice*'). Returns table \
-                       names that can be passed to table_structure or used in execute_sql."
+                       names that can be passed to table_structure or used in execute_sql. \
+                       Internal stdlib tables (names starting with `_`) are hidden by \
+                       default; pass an explicit GLOB pattern to bypass the filter. If a \
+                       table you expect based on public samples or documentation is not \
+                       appearing, tell the user so they can retry with an explicit \
+                       pattern."
     )]
     async fn list_tables(
         &self,
