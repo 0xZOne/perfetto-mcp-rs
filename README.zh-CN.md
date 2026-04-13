@@ -115,6 +115,8 @@ ORDER BY n DESC;
 | 环境变量 | 作用 |
 |---|---|
 | `PERFETTO_TP_PATH` | 已有的 `trace_processor_shell` 路径，设了就不自动下载 |
+| `PERFETTO_STARTUP_TIMEOUT_MS` | 覆盖 `trace_processor_shell` 启动超时，单位毫秒 |
+| `PERFETTO_QUERY_TIMEOUT_MS` | 覆盖 `/status` 和 `/query` 的 HTTP 超时，单位毫秒 |
 | `RUST_LOG` | `tracing-subscriber` 日志过滤，例如 `RUST_LOG=debug` 打开详细日志（写到 stderr） |
 
 命令行参数：
@@ -122,6 +124,8 @@ ORDER BY n DESC;
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--max-instances` | 3 | 最多缓存几个 `trace_processor_shell` 进程，超过按 LRU 淘汰 |
+| `--startup-timeout-ms` | 5000 | 等待新启动 `trace_processor_shell` 就绪的最长时间 |
+| `--query-timeout-ms` | 30000 | `/status` 和 `/query` 请求的 HTTP 超时 |
 
 ## 从源码构建
 

@@ -28,22 +28,22 @@ The currently recommended priority order:
 
 Goal: remove the issues most likely to make results untrustworthy or destabilize long-running use.
 
-- [ ] Fix the instance-identity check in `wait_ready`
+- [x] Fix the instance-identity check in `wait_ready`
   - Current state: `/status` can succeed against an unrelated external process
   - Suggested approach: use a `stderr` startup marker as a readiness gate before entering `/status` polling
   - Acceptance: with the target port pre-occupied, an external process is never identified as our own instance
 
-- [ ] Continuously drain and log child-process `stderr`
+- [x] Continuously drain and log child-process `stderr`
   - Current state: `stderr` is already `piped()`, but there is no background drain
   - Goal: avoid pipe stalls and improve startup-failure diagnosability
   - Acceptance: startup-failure logs are visible; long-running processes have no risk of filling the pipe
 
-- [ ] Make startup and query timeouts configurable
+- [x] Make startup and query timeouts configurable
   - Current state: timeout policy is hard-coded
   - Goal: support CLI flags or environment variables
   - Acceptance: startup timeout and HTTP query timeout can both be set explicitly
 
-- [ ] Evaluate serializing concurrent spawns for the same path
+- [x] Evaluate serializing concurrent spawns for the same path
   - Current state: concurrent `get_client` calls on the same trace can spawn multiple processes and then discard one
   - Goal: avoid pointless duplicate startups
   - Acceptance: concurrent requests for the same path spawn at most one instance
@@ -175,7 +175,7 @@ Goal: improve the experience with large traces and complex agent workflows.
 
 Focus on stability and correctness.
 
-- [ ] Complete `Milestone 1`
+- [x] Complete `Milestone 1`
 - [ ] Complete the most critical regression tests from `Milestone 2`
 - [ ] Complete at least the test hardening or an initial classification scheme from `Milestone 3`
 - [ ] Make downloads atomic

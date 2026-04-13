@@ -19,13 +19,13 @@ pub struct TraceProcessorClient {
 
 impl TraceProcessorClient {
     /// Create a client targeting `http://localhost:{port}`.
-    pub fn new(port: u16) -> Self {
+    pub fn new(port: u16, request_timeout: Duration) -> Self {
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(request_timeout)
             .build()
             .expect("failed to build HTTP client");
         Self {
-            base_url: format!("http://localhost:{port}"),
+            base_url: format!("http://127.0.0.1:{port}"),
             http,
         }
     }

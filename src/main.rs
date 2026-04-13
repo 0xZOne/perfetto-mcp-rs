@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 
 use perfetto_mcp_rs::server::PerfettoMcpServer;
-use perfetto_mcp_rs::tp_manager::TraceProcessorManager;
+use perfetto_mcp_rs::tp_manager::{TraceProcessorConfig, TraceProcessorManager};
 
 /// Perfetto trace analysis MCP server.
 ///
@@ -18,6 +19,24 @@ struct Args {
     /// Maximum number of cached trace_processor_shell instances.
     #[arg(long, default_value_t = 3)]
     max_instances: usize,
+
+    /// Max time to wait for trace_processor_shell startup, in milliseconds.
+    #[arg(
+        long,
+        env = "PERFETTO_STARTUP_TIMEOUT_MS",
+        default_value_t = 5_000_u64,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    startup_timeout_ms: u64,
+
+    /// HTTP timeout for trace_processor_shell status/query requests, in milliseconds.
+    #[arg(
+        long,
+        env = "PERFETTO_QUERY_TIMEOUT_MS",
+        default_value_t = 30_000_u64,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    query_timeout_ms: u64,
 }
 
 #[tokio::main]
@@ -30,12 +49,21 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
     tracing::info!(
-        "perfetto-mcp-rs v{} (max_instances={})",
+        "perfetto-mcp-rs v{} (max_instances={}, startup_timeout_ms={}, query_timeout_ms={})",
         env!("CARGO_PKG_VERSION"),
         args.max_instances,
+        args.startup_timeout_ms,
+        args.query_timeout_ms,
     );
 
-    let manager = Arc::new(TraceProcessorManager::new(args.max_instances));
+    let config = TraceProcessorConfig {
+        startup_timeout: Duration::from_millis(args.startup_timeout_ms),
+        request_timeout: Duration::from_millis(args.query_timeout_ms),
+    };
+    let manager = Arc::new(TraceProcessorManager::new_with_config(
+        args.max_instances,
+        config,
+    ));
     let server = PerfettoMcpServer::new(manager);
     server.run().await
 }

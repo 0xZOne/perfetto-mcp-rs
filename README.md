@@ -116,6 +116,8 @@ to your MCP server config (e.g. `~/.claude.json` or `.mcp.json`):
 | Variable | Effect |
 |---|---|
 | `PERFETTO_TP_PATH` | Path to an existing `trace_processor_shell` binary; skips auto-download |
+| `PERFETTO_STARTUP_TIMEOUT_MS` | Overrides the `trace_processor_shell` startup timeout in milliseconds |
+| `PERFETTO_QUERY_TIMEOUT_MS` | Overrides the HTTP status/query timeout in milliseconds |
 | `RUST_LOG` | `tracing-subscriber` filter, e.g. `RUST_LOG=debug` for verbose logs (written to stderr) |
 
 CLI flags:
@@ -123,6 +125,8 @@ CLI flags:
 | Flag | Default | Description |
 |---|---|---|
 | `--max-instances` | 3 | Maximum cached `trace_processor_shell` processes (LRU-evicted) |
+| `--startup-timeout-ms` | 5000 | Max time to wait for a spawned `trace_processor_shell` to become ready |
+| `--query-timeout-ms` | 30000 | HTTP timeout for `/status` and `/query` requests |
 
 ## Build from source
 
