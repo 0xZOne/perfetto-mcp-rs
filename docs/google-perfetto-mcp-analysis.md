@@ -240,7 +240,7 @@ server.tool(
   - "show the SQL to the user and ask them to confirm" — explicitly requires the LLM to route generated SQL through user confirmation
   - "reuse standard views where possible" — prefer stdlib views over raw tables
   - "prefer aggregates rather than raw data" — instills aggregate-first thinking early
-  - "loading extra must always be done in separate queries or it messes up the SQL results" — a hard constraint corresponding to the underlying behavior of the trace_processor HTTP RPC (`INCLUDE PERFETTO MODULE` and `SELECT` cannot be submitted together)
+  - "loading extra must always be done in separate queries or it messes up the SQL results" — verbatim from Google's systemInstruction. **Empirically not observed** on `trace_processor_shell v54.0` HTTP-RPC: submitting `INCLUDE PERFETTO MODULE chrome.scroll_jank.scroll_jank_v3; SELECT ... FROM chrome_janky_frames` as a single `client.query()` call correctly loads the module and returns rows. The original hard-constraint framing (inherited from task #9) has been removed from `execute_sql`'s tool description accordingly. Google may have observed this against a different trace_processor version or the interactive CLI path; we have not independently reproduced the failure mode.
 
 ---
 
@@ -1014,5 +1014,5 @@ One final insight worth recording: **slicing domain knowledge and embedding it i
 | 6 | Added the `chrome_scroll_jank_summary` domain-specific tool | `src/server.rs` | ⭐ | Landed |
 | 7 | Audit bigint precision handling in `query.rs` | `src/query.rs` | Observation | Audited — i64 passes through `serde_json::Number::from(i64)` as a lossless passthrough, never converting to f64. No changes required. See §7.7. |
 | 8 | README notes "works best with agentic MCP clients" | `README.md`, `README.zh-CN.md` | ⭐ | Landed (English + Chinese versions kept in sync) |
-| 9 | `execute_sql` description encodes the hard-constraint warning "`INCLUDE PERFETTO MODULE` must be invoked in a separate call and cannot be combined with `SELECT`" (corresponding to the Google systemInstruction hard constraint observed in §4.1.3) | `src/server.rs` | ⭐⭐ | Landed |
+| 9 | ~~`execute_sql` description encodes the hard-constraint warning "`INCLUDE PERFETTO MODULE` must be invoked in a separate call and cannot be combined with `SELECT`"~~ — **Reverted.** Empirical testing against `trace_processor_shell v54.0` shows the combined form works in a single HTTP-RPC call. The warning was inferred from Google's Gemini systemInstruction without independent verification and was removed from `src/server.rs` to stop nudging the LLM toward unnecessary extra tool calls. See §4.1.1 footnote. | `src/server.rs` | ⭐⭐ | Reverted after empirical check |
 | 10 | `list_tables` description augmented with the meta-nudge "internal `_*` tables are hidden by default; if expected tables appear missing, please mention it in the conversation so the user can tweak the filter" (drawing on the wording of Google's `perfetto-list-interesting-tables` description in §4.1.2) | `src/server.rs` | ⭐ | Landed |

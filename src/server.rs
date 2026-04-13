@@ -140,10 +140,6 @@ impl PerfettoMcpServer {
                        array of row objects. Maximum 5000 rows returned — prefer aggregates \
                        (COUNT, SUM, AVG, GROUP BY) over raw rows. The trace_path must \
                        reference a previously loaded trace.\n\
-                       IMPORTANT: `INCLUDE PERFETTO MODULE <name>;` must be sent in its own \
-                       execute_sql call, separate from the SELECT that uses it. Combining \
-                       `INCLUDE ...; SELECT ...` into one call silently drops the INCLUDE \
-                       and the SELECT fails with 'no such table'.\n\
                        Documentation:\n\
                        - Stdlib index: https://perfetto.dev/docs/analysis/stdlib-docs\n\
                        - PerfettoSQL syntax: https://perfetto.dev/docs/analysis/perfetto-sql-syntax\n\

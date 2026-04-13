@@ -240,7 +240,7 @@ server.tool(
   - "show the SQL to the user and ask them to confirm" —— 明确要求 LLM 生成的 SQL 要走用户确认
   - "reuse standard views where possible" —— 偏好 stdlib 视图而非原始表
   - "prefer aggregates rather than raw data" —— 早期就植入聚合优先思维
-  - "loading extra must always be done in separate queries or it messes up the SQL results" —— 硬约束，对应 trace_processor HTTP RPC 的底层行为（`INCLUDE PERFETTO MODULE` + `SELECT` 不能同一次提交）
+  - "loading extra must always be done in separate queries or it messes up the SQL results" —— 来自 Google systemInstruction 的原话。**经实测未能复现**：在 `trace_processor_shell v54.0` 的 HTTP-RPC 路径下，将 `INCLUDE PERFETTO MODULE chrome.scroll_jank.scroll_jank_v3; SELECT ... FROM chrome_janky_frames` 作为一次 `client.query()` 提交，模块会被正常加载且 SELECT 返回结果。原先依据 task #9 写进 `execute_sql` tool description 的硬约束措辞已对应移除。Google 的这条指令可能是针对不同版本的 trace_processor 或交互式 CLI 观察到的，我们未能独立复现该失败模式。
 
 ---
 
@@ -1014,5 +1014,5 @@ for (let step = 0; step < 20; step++) {
 | 6 | 新增 `chrome_scroll_jank_summary` 领域工具 | `src/server.rs` | ⭐ | 已落地 |
 | 7 | 检查 `query.rs` 的 bigint 精度处理 | `src/query.rs` | 观察 | 已审计——i64 通过 `serde_json::Number::from(i64)` 无损传递，不经 f64。无需修改。详见 §7.7。 |
 | 8 | README 注明 "works best with agentic MCP clients" | `README.md`, `README.zh-CN.md` | ⭐ | 已落地（中英双版本同步） |
-| 9 | `execute_sql` description 写入 "`INCLUDE PERFETTO MODULE` 必须独立调用、不能与 `SELECT` 合并" 的硬约束警告（对应 §4.1.3 观察到的 Google systemInstruction 硬约束） | `src/server.rs` | ⭐⭐ | 已落地 |
+| 9 | ~~`execute_sql` description 写入 "`INCLUDE PERFETTO MODULE` 必须独立调用、不能与 `SELECT` 合并" 的硬约束警告~~ —— **已回滚**。在 `trace_processor_shell v54.0` 上实测合并形式可以在一次 HTTP-RPC 调用内完成，该警告原本基于 Google Gemini systemInstruction 推断得出、未经独立验证，现已从 `src/server.rs` 中移除，以免让 LLM 做多余的分次调用。详见 §4.1.1 脚注。 | `src/server.rs` | ⭐⭐ | 实测后回滚 |
 | 10 | `list_tables` description 补充 meta-nudge："内部 `_*` 表默认隐藏；若预期表缺失，请在对话中反馈以便用户调整过滤器"（借鉴 §4.1.2 Google 的 `perfetto-list-interesting-tables` description 措辞） | `src/server.rs` | ⭐ | 已落地 |
