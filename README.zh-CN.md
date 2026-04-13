@@ -10,6 +10,12 @@ PerfettoSQL 查询分析。
 后端跑的是 `trace_processor_shell`，首次使用时自动下载，不用手动装
 Perfetto。
 
+推荐搭配支持 agentic 多轮工具调用的 MCP 客户端使用（Claude Code、
+Claude Desktop、Cursor 等）。这类客户端会沿着错误消息的提示自动串起
+`load_trace` → `list_tables` → `table_structure` → `execute_sql` 的常规
+流程；不支持多轮工具调用的客户端仍然能看到全部工具，但无法跟进这些
+引导性的错误信息。
+
 ## 快速安装
 
 **Linux / macOS / Windows（Git Bash、MSYS2、Cygwin）：**
@@ -63,6 +69,9 @@ if (Get-Command claude -ErrorAction SilentlyContinue) { claude mcp remove perfet
 | `list_tables` | 列出 trace 里的表和视图，可选 GLOB 过滤 |
 | `table_structure` | 看某张表的列名和类型 |
 | `execute_sql` | 跑 PerfettoSQL 查询，返回 JSON 行（最多 5000 条） |
+| `list_processes` | 列出 trace 里的进程（pid、名字、起止时间戳） |
+| `list_threads_in_process` | 列出某个进程名下的线程（最多 2000 条） |
+| `chrome_scroll_jank_summary` | 按原因汇总 Chrome 滚动卡顿（需要 Chrome trace） |
 
 一般流程：先 `load_trace`，再用 `list_tables` 看看都有哪些表，对感兴趣
 的表用 `table_structure` 查 schema，最后 `execute_sql` 查数据。分析

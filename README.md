@@ -10,6 +10,12 @@ PerfettoSQL.
 Backed by `trace_processor_shell` — downloaded automatically on first run, no
 manual Perfetto install required.
 
+Works best with agentic MCP clients (Claude Code, Claude Desktop, Cursor)
+that can chain multi-turn tool calls. Non-agentic clients will see the same
+tools but won't be able to follow the error-message nudges that steer the
+LLM through the typical `load_trace` → `list_tables` → `table_structure` →
+`execute_sql` flow.
+
 ## Quick install
 
 **Linux / macOS / Windows (Git Bash, MSYS2, Cygwin):**
@@ -64,6 +70,9 @@ if (Get-Command claude -ErrorAction SilentlyContinue) { claude mcp remove perfet
 | `list_tables` | List tables/views in the loaded trace, optional GLOB filter |
 | `table_structure` | Show column names and types for a table |
 | `execute_sql` | Run a PerfettoSQL query, returns JSON rows (max 5000) |
+| `list_processes` | List processes in the trace (pid, name, start/end timestamps) |
+| `list_threads_in_process` | List threads under a process name (up to 2000) |
+| `chrome_scroll_jank_summary` | Summarize Chrome scroll jank by cause (Chrome trace required) |
 
 Typical flow: `load_trace` → `list_tables` to discover the schema →
 `table_structure` on interesting tables → `execute_sql` to query. Chrome and
