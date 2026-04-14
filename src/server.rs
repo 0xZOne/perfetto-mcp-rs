@@ -155,21 +155,10 @@ impl PerfettoMcpServer {
     ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
 
-        let rows = client.query(&params.sql).await.map_err(|e| match e {
-            // Nudge only on missing-table — column errors would add noise.
-            PerfettoError::QueryError(msg) if msg.contains("no such table:") => format!(
-                "SQL error: {msg}\n\nHint: Call `list_tables` to find the correct table \
-                 name, then `table_structure` on it before retrying. Stdlib tables \
-                 (e.g. `chrome_scroll_update_info`) require `INCLUDE PERFETTO MODULE ...;` \
-                 first."
-            ),
-            PerfettoError::QueryError(msg) => format!("SQL error: {msg}"),
-            PerfettoError::TooManyRows => "Query returned more than 5000 rows. Results should \
-                     be aggregates (COUNT, SUM, AVG, GROUP BY) rather than raw rows. Add \
-                     aggregation, or narrow with a WHERE filter, or add a LIMIT."
-                .to_owned(),
-            other => format!("Query failed: {other}"),
-        })?;
+        let rows = client
+            .query(&params.sql)
+            .await
+            .map_err(format_execute_sql_error)?;
 
         serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
     }
@@ -333,24 +322,10 @@ impl PerfettoMcpServer {
                    FROM chrome_janky_frames \
                    GROUP BY cause_of_jank \
                    ORDER BY jank_count DESC";
-        let rows = client.query(sql).await.map_err(|e| match e {
-            // Only nudge "wrong trace type" when the error actually looks like
-            // a missing-table/module — otherwise a real SQL bug would be
-            // hidden behind an irrelevant hint.
-            PerfettoError::QueryError(msg)
-                if msg.contains("no such table") || msg.contains("Module not found") =>
-            {
-                format!(
-                    "Failed to run Chrome scroll jank summary: {msg}\n\nHint: this tool \
-                     requires a Chrome trace with scroll data. For non-Chrome traces, \
-                     use execute_sql with a different query."
-                )
-            }
-            PerfettoError::QueryError(msg) => {
-                format!("Failed to run Chrome scroll jank summary: {msg}")
-            }
-            other => format!("Failed: {other}"),
-        })?;
+        let rows = client
+            .query(sql)
+            .await
+            .map_err(format_chrome_scroll_jank_error)?;
         if rows.is_empty() {
             return Ok(
                 "No scroll jank found in this trace (no scroll activity captured \
@@ -387,6 +362,45 @@ impl PerfettoMcpServer {
             .get_client(Path::new(trace_path))
             .await
             .map_err(|e| format!("Failed to open trace {trace_path:?}: {e}"))
+    }
+}
+
+/// Hint is gated on `"no such table:"` so unrelated SQL errors (e.g. a
+/// column typo) don't get misrouted to "go call list_tables."
+fn format_execute_sql_error(err: PerfettoError) -> String {
+    match err {
+        PerfettoError::QueryError(msg) if msg.contains("no such table:") => format!(
+            "SQL error: {msg}\n\nHint: Call `list_tables` to find the correct table \
+             name, then `table_structure` on it before retrying. Stdlib tables \
+             (e.g. `chrome_scroll_update_info`) require `INCLUDE PERFETTO MODULE ...;` \
+             first."
+        ),
+        PerfettoError::QueryError(msg) => format!("SQL error: {msg}"),
+        PerfettoError::TooManyRows => "Query returned more than 5000 rows. Results should \
+                 be aggregates (COUNT, SUM, AVG, GROUP BY) rather than raw rows. Add \
+                 aggregation, or narrow with a WHERE filter, or add a LIMIT."
+            .to_owned(),
+        other => format!("Query failed: {other}"),
+    }
+}
+
+/// "Wrong trace type" hint is gated on missing-table/module so an unrelated
+/// SQL bug isn't hidden behind a misleading "use a Chrome trace" suggestion.
+fn format_chrome_scroll_jank_error(err: PerfettoError) -> String {
+    match err {
+        PerfettoError::QueryError(msg)
+            if msg.contains("no such table") || msg.contains("Module not found") =>
+        {
+            format!(
+                "Failed to run Chrome scroll jank summary: {msg}\n\nHint: this tool \
+                 requires a Chrome trace with scroll data. For non-Chrome traces, \
+                 use execute_sql with a different query."
+            )
+        }
+        PerfettoError::QueryError(msg) => {
+            format!("Failed to run Chrome scroll jank summary: {msg}")
+        }
+        other => format!("Failed: {other}"),
     }
 }
 
@@ -468,6 +482,93 @@ mod tests {
         assert!(sql_string_literal("foo\0bar").is_err());
         assert!(sql_string_literal("foo\rbar").is_err());
         assert!(sql_string_literal("foo\tbar").is_err());
+    }
+
+    #[test]
+    fn execute_sql_hint_fires_on_missing_table() {
+        let formatted =
+            format_execute_sql_error(PerfettoError::QueryError("no such table: foo".to_owned()));
+        assert!(
+            formatted.contains("Hint:"),
+            "missing-table errors must surface a hint, got: {formatted}",
+        );
+        assert!(
+            formatted.contains("list_tables"),
+            "hint must point at list_tables, got: {formatted}",
+        );
+        assert!(
+            formatted.contains("INCLUDE PERFETTO MODULE"),
+            "hint must mention the stdlib include directive, got: {formatted}",
+        );
+    }
+
+    #[test]
+    fn execute_sql_hint_skips_unrelated_query_errors() {
+        let formatted = format_execute_sql_error(PerfettoError::QueryError(
+            "syntax error near WHERE".to_owned(),
+        ));
+        assert!(
+            !formatted.contains("Hint:"),
+            "unrelated SQL errors must not get the missing-table hint, got: {formatted}",
+        );
+        assert!(
+            formatted.contains("syntax error"),
+            "unrelated errors must still surface the original message, got: {formatted}",
+        );
+    }
+
+    #[test]
+    fn execute_sql_too_many_rows_message_explains_aggregation() {
+        let formatted = format_execute_sql_error(PerfettoError::TooManyRows);
+        assert!(
+            formatted.contains("5000"),
+            "row-cap message must name the limit, got: {formatted}",
+        );
+        assert!(
+            formatted.contains("LIMIT"),
+            "row-cap message must suggest LIMIT, got: {formatted}",
+        );
+    }
+
+    #[test]
+    fn chrome_scroll_jank_hint_fires_on_missing_table() {
+        let formatted = format_chrome_scroll_jank_error(PerfettoError::QueryError(
+            "no such table: chrome_janky_frames".to_owned(),
+        ));
+        assert!(
+            formatted.contains("Chrome trace"),
+            "missing-table errors must surface the Chrome-trace hint, got: {formatted}",
+        );
+        assert!(
+            formatted.contains("execute_sql"),
+            "hint must point at execute_sql for non-Chrome traces, got: {formatted}",
+        );
+    }
+
+    #[test]
+    fn chrome_scroll_jank_hint_fires_on_missing_module() {
+        let formatted = format_chrome_scroll_jank_error(PerfettoError::QueryError(
+            "Module not found: chrome.scroll_jank.scroll_jank_v3".to_owned(),
+        ));
+        assert!(
+            formatted.contains("Chrome trace"),
+            "missing-module errors must surface the Chrome-trace hint, got: {formatted}",
+        );
+    }
+
+    #[test]
+    fn chrome_scroll_jank_skips_unrelated_query_errors() {
+        let formatted = format_chrome_scroll_jank_error(PerfettoError::QueryError(
+            "syntax error near GROUP".to_owned(),
+        ));
+        assert!(
+            !formatted.contains("Chrome trace"),
+            "unrelated SQL errors must not get the Chrome-trace hint, got: {formatted}",
+        );
+        assert!(
+            formatted.contains("syntax error"),
+            "unrelated errors must still surface the original message, got: {formatted}",
+        );
     }
 
     fn test_server() -> PerfettoMcpServer {

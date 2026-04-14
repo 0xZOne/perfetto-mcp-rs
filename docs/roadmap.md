@@ -52,25 +52,26 @@ Goal: remove the issues most likely to make results untrustworthy or destabilize
 
 Goal: raise "works right now" to "hard to regress later."
 
-- [ ] Add a pure unit test for custom `starting_port` wraparound
+- [x] Add a pure unit test for custom `starting_port` wraparound
   - Goal: verify that after wraparound, allocation returns to `starting_port`
   - Suggestion: extract the port-allocation logic as a pure function to make the boundary testable
   - Acceptance: covers `u16::MAX -> starting_port`
 
-- [ ] Add tests for LRU eviction and instance reuse
+- [x] Add tests for LRU eviction and instance reuse
   - Acceptance: beyond capacity, only the oldest unused instance is evicted
 
-- [ ] Add tests for auto-recovery after an abnormal child-process exit
+- [x] Add tests for auto-recovery after an abnormal child-process exit
   - Acceptance: after an old instance dies, the next query recovers
 
-- [ ] Add concurrent-access tests for same-trace and different-trace paths
+- [x] Add concurrent-access tests for same-trace and different-trace paths
   - Acceptance: no deadlocks, no accidental reuse, no duplicate spawns
 
 - [ ] Add failure-path tests
   - Scenarios: missing trace, non-executable binary, download failure, port conflict
+  - Status: missing-trace covered; binary / download / port-conflict scenarios still pending
   - Acceptance: error messages are clear and localizable
 
-- [ ] Add regression tests for the server-layer hint logic
+- [x] Add regression tests for the server-layer hint logic
   - Current state: relies on `msg.contains(...)`
   - Goal: lock in the current "missing table / missing module" hint behavior
   - Acceptance: tests fire when error wording or classification changes
@@ -176,16 +177,16 @@ Goal: improve the experience with large traces and complex agent workflows.
 Focus on stability and correctness.
 
 - [x] Complete `Milestone 1`
-- [ ] Complete the most critical regression tests from `Milestone 2`
+- [x] Complete the most critical regression tests from `Milestone 2`
 - [ ] Complete at least the test hardening or an initial classification scheme from `Milestone 3`
 - [ ] Make downloads atomic
 
 Release gate:
 
 - [ ] No known high-priority correctness bugs in the spawn, query, and reclaim main path
-- [ ] Stable unit tests
-- [ ] Stable e2e in CI
-- [ ] Test coverage for key error hints
+- [x] Stable unit tests
+- [x] Stable e2e in CI
+- [x] Test coverage for key error hints
 
 ## v0.3
 

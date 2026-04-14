@@ -1081,6 +1081,175 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn concurrent_different_trace_requests_spawn_independently() {
+        let manager = Arc::new(TraceProcessorManager::new(4));
+        let spawn_count = Arc::new(AtomicUsize::new(0));
+
+        let task_a = {
+            let manager = Arc::clone(&manager);
+            let spawn_count = Arc::clone(&spawn_count);
+            tokio::spawn(async move {
+                manager
+                    .get_or_spawn_instance(
+                        PathBuf::from("/tmp/concurrent-a.perfetto-trace"),
+                        move |port, _| async move {
+                            spawn_count.fetch_add(1, Ordering::SeqCst);
+                            Ok(fake_instance(port))
+                        },
+                    )
+                    .await
+            })
+        };
+
+        let task_b = {
+            let manager = Arc::clone(&manager);
+            let spawn_count = Arc::clone(&spawn_count);
+            tokio::spawn(async move {
+                manager
+                    .get_or_spawn_instance(
+                        PathBuf::from("/tmp/concurrent-b.perfetto-trace"),
+                        move |port, _| async move {
+                            spawn_count.fetch_add(1, Ordering::SeqCst);
+                            Ok(fake_instance(port))
+                        },
+                    )
+                    .await
+            })
+        };
+
+        task_a.await.expect("join task_a").expect("client a");
+        task_b.await.expect("join task_b").expect("client b");
+
+        assert_eq!(
+            spawn_count.load(Ordering::SeqCst),
+            2,
+            "different traces must spawn independently and not share locks",
+        );
+    }
+
+    #[tokio::test]
+    async fn manager_evicts_oldest_instance_when_capacity_exceeded() {
+        let manager = Arc::new(TraceProcessorManager::new(2));
+        let trace_a = PathBuf::from("/tmp/lru-a.perfetto-trace");
+        let trace_b = PathBuf::from("/tmp/lru-b.perfetto-trace");
+        let trace_c = PathBuf::from("/tmp/lru-c.perfetto-trace");
+        let spawn_count = Arc::new(AtomicUsize::new(0));
+
+        for path in [&trace_a, &trace_b, &trace_c] {
+            let counter = Arc::clone(&spawn_count);
+            manager
+                .get_or_spawn_instance(path.clone(), move |port, _| async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(fake_instance(port))
+                })
+                .await
+                .expect("initial spawn");
+        }
+        assert_eq!(
+            spawn_count.load(Ordering::SeqCst),
+            3,
+            "three distinct traces must trigger three spawns",
+        );
+
+        // trace_a was the LRU entry; re-fetching it must respawn.
+        {
+            let counter = Arc::clone(&spawn_count);
+            manager
+                .get_or_spawn_instance(trace_a, move |port, _| async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(fake_instance(port))
+                })
+                .await
+                .expect("respawn evicted trace");
+        }
+        assert_eq!(
+            spawn_count.load(Ordering::SeqCst),
+            4,
+            "evicted instance must respawn on next request",
+        );
+
+        // trace_c was inserted most recently and is still cached.
+        {
+            let counter = Arc::clone(&spawn_count);
+            manager
+                .get_or_spawn_instance(trace_c, move |port, _| async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(fake_instance(port))
+                })
+                .await
+                .expect("cached client");
+        }
+        assert_eq!(
+            spawn_count.load(Ordering::SeqCst),
+            4,
+            "cached instance must reuse, not respawn",
+        );
+    }
+
+    #[tokio::test]
+    async fn get_or_spawn_instance_recovers_after_process_death() {
+        let manager = Arc::new(TraceProcessorManager::new(2));
+        let canonical = PathBuf::from("/tmp/auto-recovery-trace.perfetto-trace");
+        let spawn_count = Arc::new(AtomicUsize::new(0));
+
+        // First spawn: insert a process that exits immediately.
+        {
+            let counter = Arc::clone(&spawn_count);
+            manager
+                .get_or_spawn_instance(canonical.clone(), move |port, _| async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(fake_instance_with_process(port, spawn_quick_exit_process()))
+                })
+                .await
+                .expect("initial spawn");
+        }
+
+        // Give the kernel a moment to reap the exited child so try_wait observes it.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Second call: cached_client must detect the dead process and respawn.
+        {
+            let counter = Arc::clone(&spawn_count);
+            manager
+                .get_or_spawn_instance(canonical, move |port, _| async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(fake_instance(port))
+                })
+                .await
+                .expect("auto-recovery respawn");
+        }
+
+        assert_eq!(
+            spawn_count.load(Ordering::SeqCst),
+            2,
+            "dead cached instance must trigger a respawn on next request",
+        );
+    }
+
+    #[tokio::test]
+    async fn get_client_returns_clear_error_for_missing_trace() {
+        let manager = TraceProcessorManager::new_with_binary(
+            PathBuf::from("/nonexistent/trace_processor_shell"),
+            1,
+        );
+        let missing = PathBuf::from("/nonexistent/this-trace-does-not-exist.perfetto-trace");
+
+        let err = manager
+            .get_client(&missing)
+            .await
+            .expect_err("missing trace must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("trace file not found"),
+            "error should call out the missing trace, got: {msg}",
+        );
+        assert!(
+            msg.contains("this-trace-does-not-exist.perfetto-trace"),
+            "error should include the trace path, got: {msg}",
+        );
+    }
+
     #[test]
     fn startup_parser_never_overrides_ipv4_bind_failure_with_ready() {
         let mut state = StartupLogState::default();
