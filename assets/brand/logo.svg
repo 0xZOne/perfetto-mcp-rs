@@ -1,0 +1,60 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">perfetto-mcp-rs logo</title>
+  <desc id="desc">A dark rounded-square mark combining Perfetto-style trace lanes with a connected MCP node motif.</desc>
+  <defs>
+    <linearGradient id="bg" x1="72" y1="52" x2="440" y2="460" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F1724"/>
+      <stop offset="1" stop-color="#14263A"/>
+    </linearGradient>
+    <linearGradient id="traceWarm" x1="126" y1="126" x2="306" y2="126" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FF7A59"/>
+      <stop offset="1" stop-color="#FF9A4D"/>
+    </linearGradient>
+    <linearGradient id="traceCool" x1="126" y1="221" x2="322" y2="221" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#48C7F0"/>
+      <stop offset="1" stop-color="#5FE0C1"/>
+    </linearGradient>
+    <linearGradient id="traceGold" x1="126" y1="320" x2="322" y2="320" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F5B83D"/>
+      <stop offset="1" stop-color="#FFD46B"/>
+    </linearGradient>
+    <linearGradient id="nodeGlow" x1="322" y1="110" x2="420" y2="268" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B8F4FF"/>
+      <stop offset="1" stop-color="#8CD9FF"/>
+    </linearGradient>
+    <filter id="softShadow" x="22" y="22" width="468" height="468" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#08101A" flood-opacity="0.34"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#softShadow)">
+    <rect x="52" y="52" width="408" height="408" rx="96" fill="url(#bg)"/>
+    <rect x="68" y="68" width="376" height="376" rx="80" stroke="#29415A" stroke-opacity="0.9" stroke-width="2"/>
+
+    <g transform="translate(0 22)">
+      <path d="M116 148H318" stroke="#223548" stroke-width="14" stroke-linecap="round"/>
+      <path d="M116 240H318" stroke="#223548" stroke-width="14" stroke-linecap="round"/>
+      <path d="M116 336H318" stroke="#223548" stroke-width="14" stroke-linecap="round"/>
+
+      <rect x="98" y="110" width="30" height="250" rx="15" fill="#E6EEF5"/>
+
+      <rect x="126" y="116" width="168" height="32" rx="16" fill="url(#traceWarm)"/>
+      <rect x="302" y="116" width="34" height="32" rx="16" fill="#F3A281" fill-opacity="0.9"/>
+
+      <rect x="126" y="210" width="126" height="30" rx="15" fill="url(#traceCool)"/>
+      <rect x="260" y="210" width="62" height="30" rx="15" fill="#76E8D6" fill-opacity="0.95"/>
+
+      <rect x="126" y="306" width="96" height="30" rx="15" fill="url(#traceGold)"/>
+      <rect x="230" y="306" width="92" height="30" rx="15" fill="#FFD978" fill-opacity="0.95"/>
+
+      <path d="M338 132H370L402 172M252 225H356L402 172M322 321H360L402 280" stroke="url(#nodeGlow)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+
+      <circle cx="402" cy="172" r="18" fill="#DDF7FF"/>
+      <circle cx="402" cy="280" r="18" fill="#DDF7FF"/>
+      <circle cx="370" cy="132" r="14" fill="#9BE5FF"/>
+      <circle cx="370" cy="132" r="25" fill="#9BE5FF" fill-opacity="0.12"/>
+      <circle cx="402" cy="172" r="30" fill="#A4E9FF" fill-opacity="0.08"/>
+      <circle cx="402" cy="280" r="30" fill="#A4E9FF" fill-opacity="0.08"/>
+    </g>
+  </g>
+</svg>

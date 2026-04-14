@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/brand/logo-wordmark.svg" width="820" alt="perfetto-mcp-rs logo">
+</p>
+
 # perfetto-mcp-rs
 
 [English](README.md) | **简体中文**
