@@ -887,9 +887,10 @@ mod tests {
         // must clear it so the timer cannot "carry over" pre-failure time.
         let results = Arc::new(StdMutex::new(std::collections::VecDeque::from([
             Ok(status_for_trace(&expected_trace)),
-            Err(crate::error::PerfettoError::QueryError(
-                "simulated transient /status failure".to_owned(),
-            )),
+            Err(crate::error::PerfettoError::QueryError {
+                kind: crate::error::QueryErrorKind::Other,
+                message: "simulated transient /status failure".to_owned(),
+            }),
             Ok(status_for_trace(&expected_trace)),
             Ok(status_for_trace(&expected_trace)),
             Ok(status_for_trace(&expected_trace)),

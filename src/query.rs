@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use crate::error::{PerfettoError, MAX_ROWS};
+use crate::error::{PerfettoError, QueryErrorKind, MAX_ROWS};
 use crate::proto::query_result::cells_batch::CellType;
 use crate::proto::QueryResult;
 
@@ -14,7 +14,10 @@ use crate::proto::QueryResult;
 pub fn decode_query_result(result: &QueryResult) -> Result<Vec<Value>, PerfettoError> {
     if let Some(ref err) = result.error {
         if !err.is_empty() {
-            return Err(PerfettoError::QueryError(err.clone()));
+            return Err(PerfettoError::QueryError {
+                kind: QueryErrorKind::classify(err),
+                message: err.clone(),
+            });
         }
     }
 
@@ -160,8 +163,14 @@ mod tests {
         };
         let err = decode_query_result(&result).unwrap_err();
         assert!(
-            matches!(err, PerfettoError::QueryError(ref msg) if msg.contains("foo")),
-            "expected QueryError, got: {err:?}",
+            matches!(
+                err,
+                PerfettoError::QueryError {
+                    kind: QueryErrorKind::MissingTable,
+                    ref message,
+                } if message.contains("foo")
+            ),
+            "expected MissingTable QueryError, got: {err:?}",
         );
     }
 

@@ -67,7 +67,7 @@ fn e2e_smoke_real_trace_round_trip() {
 
         let missing_table_err = client.query("SELECT * FROM nonexistent_xyz").await;
         assert!(
-            matches!(missing_table_err, Err(PerfettoError::QueryError(_))),
+            matches!(missing_table_err, Err(PerfettoError::QueryError { .. })),
             "missing-table error must classify as QueryError, got {missing_table_err:?}",
         );
 

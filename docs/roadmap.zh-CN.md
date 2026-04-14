@@ -85,16 +85,16 @@ Last updated: 2026-04-13
 
 目标：减少脆弱的字符串匹配，提高提示逻辑稳定性和可测试性。
 
-- [ ] 设计 `QueryErrorKind`
-  - 候选：`MissingTable`、`MissingModule`、`SyntaxError`、`Other`
+- [x] 设计 `QueryErrorKind`
+  - 已落地：`MissingTable`、`MissingModule`、`Other`（标注 `#[non_exhaustive]`；`SyntaxError` 等到首个消费者出现时再加）
   - 验收：形成清晰枚举，不破坏原始错误显示
 
-- [ ] 在更靠近 client/decode 的层面做错误分类
-  - 目标：server 层不直接依赖字符串匹配
+- [x] 在更靠近 client/decode 的层面做错误分类
+  - 分类统一发生在 `decode_query_result`；两个 server 提示 formatter 改为对 `QueryErrorKind` 的穷尽 match
   - 验收：提示逻辑改为 match 枚举
 
-- [ ] 清理或收敛未使用错误语义
-  - 目标：处理 `PerfettoError::NoTraceLoaded` 这类当前未落地的变体
+- [x] 清理或收敛未使用错误语义
+  - `PerfettoError::NoTraceLoaded` 已删除；`QueryError` 重构为 struct variant `{ kind, message }`
   - 验收：错误枚举和实际语义一致
 
 ## Milestone 4: Download And Distribution Hardening
@@ -178,7 +178,7 @@ Last updated: 2026-04-13
 
 - [x] 完成 `Milestone 1`
 - [x] 完成 `Milestone 2` 中最关键的回归测试
-- [ ] 至少完成 `Milestone 3` 的测试补强或初步分类方案
+- [x] 至少完成 `Milestone 3` 的测试补强或初步分类方案
 - [ ] 完成下载原子化
 
 发布门槛：

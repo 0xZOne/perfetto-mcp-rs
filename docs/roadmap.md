@@ -85,16 +85,16 @@ Goal: raise "works right now" to "hard to regress later."
 
 Goal: reduce fragile string matching and make hint logic stable and testable.
 
-- [ ] Design `QueryErrorKind`
-  - Candidates: `MissingTable`, `MissingModule`, `SyntaxError`, `Other`
+- [x] Design `QueryErrorKind`
+  - Shipped: `MissingTable`, `MissingModule`, `Other` (marked `#[non_exhaustive]`; `SyntaxError` deferred until a consumer needs it)
   - Acceptance: a clear enum that does not break original error display
 
-- [ ] Classify errors closer to the client/decode layer
-  - Goal: the server layer no longer depends directly on string matching
+- [x] Classify errors closer to the client/decode layer
+  - Classification happens once in `decode_query_result`; both server hint formatters now exhaustively match on `QueryErrorKind`
   - Acceptance: hint logic becomes an enum match
 
-- [ ] Clean up or consolidate unused error semantics
-  - Goal: address variants like `PerfettoError::NoTraceLoaded` that currently have no call site
+- [x] Clean up or consolidate unused error semantics
+  - `PerfettoError::NoTraceLoaded` dropped; `QueryError` restructured to a struct variant `{ kind, message }`
   - Acceptance: the error enum matches actual semantics
 
 ## Milestone 4: Download And Distribution Hardening
@@ -178,7 +178,7 @@ Focus on stability and correctness.
 
 - [x] Complete `Milestone 1`
 - [x] Complete the most critical regression tests from `Milestone 2`
-- [ ] Complete at least the test hardening or an initial classification scheme from `Milestone 3`
+- [x] Complete at least the test hardening or an initial classification scheme from `Milestone 3`
 - [ ] Make downloads atomic
 
 Release gate:
