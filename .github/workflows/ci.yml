@@ -11,7 +11,7 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -25,12 +25,41 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Cache trace_processor_shell
-        uses: actions/cache@v5
-        with:
-          path: ~/.local/share/perfetto-mcp-rs
-          key: tp-shell-${{ hashFiles('src/download.rs') }}-${{ runner.os }}
-
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install protoc
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux)
+              sudo apt-get update
+              sudo apt-get install -y protobuf-compiler
+              ;;
+            macOS)
+              brew install protobuf
+              ;;
+            Windows)
+              choco install protoc --no-progress
+              ;;
+          esac
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Intentionally NO actions/cache for trace_processor_shell. Every
+      # matrix run downloads cold so atomic persist + sidecar write +
+      # Windows rename-retry are exercised on every PR per OS. The ~35 MB
+      # bandwidth cost is acceptable for the M4 coverage gain.
+
       - run: cargo test --all-targets

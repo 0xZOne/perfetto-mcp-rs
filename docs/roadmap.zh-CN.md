@@ -1,6 +1,6 @@
 # ROADMAP
 
-Last updated: 2026-04-13
+Last updated: 2026-04-14
 
 面向 `perfetto-mcp-rs` 的下一阶段执行清单。目标不是继续堆功能，而是先补齐正确性边界、测试防回归能力，以及高价值分析工具。
 
@@ -101,16 +101,20 @@ Last updated: 2026-04-13
 
 目标：让安装、升级和缓存恢复更稳。
 
-- [ ] 将下载逻辑改为“临时文件 + 原子重命名”
+- [x] 将下载逻辑改为“临时文件 + 原子重命名”
+  - 已落地：`NamedTempFile::new_in(cache_dir)` 流式写入 + `persist` 原子 rename；Windows 下 `PermissionDenied` 做 5 次退避重试抵御 AV 占用句柄；单次下载挂 10 分钟 wall-clock 上限
   - 验收：下载中断不会污染缓存
 
-- [ ] 增加 checksum 或等效校验
+- [x] 增加 checksum 或等效校验
+  - 已落地：下载时流式计算 SHA-256，写入 `trace_processor_shell.sha256` sidecar；缓存命中时重新校验，不一致即重下；pre-sidecar 缓存在本地原地哈希自愈以支持气隙环境升级
   - 验收：损坏 binary 可被识别并重新下载
 
-- [ ] 增加下载源 / 镜像配置能力
+- [x] 增加下载源 / 镜像配置能力
+  - 已落地：`--artifacts-base-url` / `PERFETTO_ARTIFACTS_BASE_URL` 贯通到 `DownloadConfig`；日志与错误链中 userinfo/query 经 `redact_url` + `reqwest::Error::without_url` 剥离，镜像 token 不泄露
   - 验收：网络受限环境可切换源
 
-- [ ] 增强跨平台 CI 覆盖
+- [x] 增强跨平台 CI 覆盖
+  - 已落地：CI 拆成 `lint` + `test`；test 跑 `[ubuntu, macos, windows]` 矩阵 `fail-fast: false`，刻意不缓存 `trace_processor_shell`，每次 PR × OS 都冷跑完整下载路径
   - 至少覆盖：Linux、macOS、Windows
   - 验收：构建、测试、release 资产一致可用
 
@@ -179,7 +183,7 @@ Last updated: 2026-04-13
 - [x] 完成 `Milestone 1`
 - [x] 完成 `Milestone 2` 中最关键的回归测试
 - [x] 至少完成 `Milestone 3` 的测试补强或初步分类方案
-- [ ] 完成下载原子化
+- [x] 完成 `Milestone 4`
 
 发布门槛：
 

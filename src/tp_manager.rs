@@ -12,6 +12,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{watch, Mutex, OnceCell};
 
+use crate::download::DownloadConfig;
 use crate::proto::StatusResult;
 use crate::tp_client::TraceProcessorClient;
 
@@ -244,6 +245,7 @@ pub struct TraceProcessorManager {
     spawn_locks: Mutex<std::collections::HashMap<PathBuf, Arc<Mutex<()>>>>,
     binary_path: OnceCell<PathBuf>,
     config: TraceProcessorConfig,
+    download_config: DownloadConfig,
 }
 
 impl std::fmt::Debug for TraceProcessorManager {
@@ -264,31 +266,11 @@ struct ManagerInner {
 impl TraceProcessorManager {
     pub const DEFAULT_STARTING_PORT: u16 = 9001;
 
-    /// Create a new manager that lazily resolves `trace_processor_shell` on
-    /// the first `get_client` call.
-    pub fn new(max_instances: usize) -> Self {
-        Self::new_with_config(max_instances, TraceProcessorConfig::default())
-    }
-
-    pub fn new_with_config(max_instances: usize, config: TraceProcessorConfig) -> Self {
-        Self::new_with_starting_port_and_config(max_instances, Self::DEFAULT_STARTING_PORT, config)
-    }
-
-    /// Used when the default port range is already in use (e.g. a second
-    /// instance on the same host, or integration tests coexisting with a
-    /// running server).
-    pub fn new_with_starting_port(max_instances: usize, starting_port: u16) -> Self {
-        Self::new_with_starting_port_and_config(
-            max_instances,
-            starting_port,
-            TraceProcessorConfig::default(),
-        )
-    }
-
-    pub fn new_with_starting_port_and_config(
+    fn new_inner(
         max_instances: usize,
         starting_port: u16,
         config: TraceProcessorConfig,
+        download_config: DownloadConfig,
     ) -> Self {
         let cap = NonZeroUsize::new(max_instances).unwrap_or(NonZeroUsize::MIN);
         Self {
@@ -300,7 +282,48 @@ impl TraceProcessorManager {
             spawn_locks: Mutex::new(std::collections::HashMap::new()),
             binary_path: OnceCell::new(),
             config,
+            download_config,
         }
+    }
+
+    pub fn new(max_instances: usize) -> Self {
+        Self::new_inner(
+            max_instances,
+            Self::DEFAULT_STARTING_PORT,
+            TraceProcessorConfig::default(),
+            DownloadConfig::default(),
+        )
+    }
+
+    pub fn new_with_configs(
+        max_instances: usize,
+        config: TraceProcessorConfig,
+        download_config: DownloadConfig,
+    ) -> Self {
+        Self::new_inner(
+            max_instances,
+            Self::DEFAULT_STARTING_PORT,
+            config,
+            download_config,
+        )
+    }
+
+    pub fn new_with_starting_port(max_instances: usize, starting_port: u16) -> Self {
+        Self::new_inner(
+            max_instances,
+            starting_port,
+            TraceProcessorConfig::default(),
+            DownloadConfig::default(),
+        )
+    }
+
+    pub fn new_with_starting_port_and_configs(
+        max_instances: usize,
+        starting_port: u16,
+        config: TraceProcessorConfig,
+        download_config: DownloadConfig,
+    ) -> Self {
+        Self::new_inner(max_instances, starting_port, config, download_config)
     }
 
     /// Create a manager with a pre-resolved binary path (tests only, avoids
@@ -320,7 +343,7 @@ impl TraceProcessorManager {
         let path = self
             .binary_path
             .get_or_try_init(|| async {
-                let p = crate::download::ensure_binary().await?;
+                let p = crate::download::ensure_binary(&self.download_config).await?;
                 tracing::info!("using trace_processor_shell: {}", p.display());
                 Ok::<PathBuf, anyhow::Error>(p)
             })
@@ -749,6 +772,38 @@ mod tests {
     fn strip_size_suffix_requires_trailing_paren() {
         // Has " (" but does not end in ")" — treat as no suffix.
         assert_eq!(strip_size_suffix("foo (oops"), "foo (oops");
+    }
+
+    #[test]
+    fn new_with_starting_port_and_configs_wires_all_fields() {
+        let tp_config = TraceProcessorConfig {
+            startup_timeout: Duration::from_millis(4_321),
+            request_timeout: Duration::from_millis(7_654),
+        };
+        let download_config =
+            DownloadConfig::from_override(Some("https://mirror.example/tp".to_string()));
+
+        let manager = TraceProcessorManager::new_with_starting_port_and_configs(
+            5,
+            19_500,
+            tp_config,
+            download_config,
+        );
+
+        assert_eq!(manager.config.startup_timeout, Duration::from_millis(4_321));
+        assert_eq!(manager.config.request_timeout, Duration::from_millis(7_654));
+        assert_eq!(
+            manager.download_config.redacted_base_url(),
+            "https://mirror.example/tp"
+        );
+
+        let inner = manager
+            .inner
+            .try_lock()
+            .expect("freshly built manager is uncontended");
+        assert_eq!(inner.starting_port, 19_500);
+        assert_eq!(inner.next_port, 19_500);
+        assert_eq!(inner.instances.cap().get(), 5);
     }
 
     #[tokio::test]
@@ -1313,10 +1368,11 @@ mod tests {
     }
 
     fn spawn_hold_process() -> Child {
+        // Windows `timeout` refuses redirected stdin; use `ping` as a tty-less sleep.
         #[cfg(windows)]
         let mut cmd = {
-            let mut cmd = TokioCommand::new("cmd");
-            cmd.args(["/C", "timeout", "/T", "30", "/NOBREAK"]);
+            let mut cmd = TokioCommand::new("ping");
+            cmd.args(["-n", "31", "127.0.0.1"]);
             cmd
         };
 

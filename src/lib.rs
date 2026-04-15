@@ -5,7 +5,7 @@ pub(crate) mod proto {
     include!(concat!(env!("OUT_DIR"), "/perfetto.protos.rs"));
 }
 
-pub(crate) mod download;
+pub mod download;
 pub mod error;
 pub(crate) mod query;
 pub mod server;

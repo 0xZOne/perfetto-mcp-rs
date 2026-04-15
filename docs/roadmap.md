@@ -1,6 +1,6 @@
 # ROADMAP
 
-Last updated: 2026-04-13
+Last updated: 2026-04-14
 
 The next-phase execution list for `perfetto-mcp-rs`. The goal is not to pile on more features, but to first close correctness gaps, build up regression-test coverage, and invest in high-value analysis tooling.
 
@@ -101,16 +101,20 @@ Goal: reduce fragile string matching and make hint logic stable and testable.
 
 Goal: make install, upgrade, and cache recovery more reliable.
 
-- [ ] Switch the download path to "temp file + atomic rename"
+- [x] Switch the download path to "temp file + atomic rename"
+  - Landed: stream into `NamedTempFile::new_in(cache_dir)` and `persist` into place; on Windows, retry `PermissionDenied` up to five times with backoff to survive antivirus holding the handle; a single download attempt is capped at a 10-minute wall-clock deadline.
   - Acceptance: an interrupted download does not pollute the cache
 
-- [ ] Add checksum or equivalent verification
+- [x] Add checksum or equivalent verification
+  - Landed: streaming SHA-256 hasher writes a `trace_processor_shell.sha256` sidecar on save; cache hits re-verify, mismatches redownload, and pre-sidecar caches self-heal in place to support air-gapped upgrades.
   - Acceptance: a corrupted binary is detected and redownloaded
 
-- [ ] Add configurable download source / mirror
+- [x] Add configurable download source / mirror
+  - Landed: `--artifacts-base-url` / `PERFETTO_ARTIFACTS_BASE_URL` threaded through `DownloadConfig`; userinfo and query strings are stripped from logs and from `reqwest::Error` via `redact_url` + `without_url`, so mirror tokens cannot leak.
   - Acceptance: networks with restricted access can switch sources
 
-- [ ] Strengthen cross-platform CI coverage
+- [x] Strengthen cross-platform CI coverage
+  - Landed: CI is split into `lint` + `test`; test runs as a `[ubuntu, macos, windows]` matrix with `fail-fast: false`, and the `trace_processor_shell` cache is deliberately not restored so the full download path runs cold on every PR × OS.
   - At minimum: Linux, macOS, Windows
   - Acceptance: build, test, and release assets all work consistently
 
@@ -179,7 +183,7 @@ Focus on stability and correctness.
 - [x] Complete `Milestone 1`
 - [x] Complete the most critical regression tests from `Milestone 2`
 - [x] Complete at least the test hardening or an initial classification scheme from `Milestone 3`
-- [ ] Make downloads atomic
+- [x] Complete `Milestone 4`
 
 Release gate:
 
