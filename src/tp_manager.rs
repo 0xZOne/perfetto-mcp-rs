@@ -715,6 +715,34 @@ mod tests {
     }
 
     #[test]
+    fn preflight_port_free_rejects_real_bound_listener() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral listener");
+        let port = listener.local_addr().expect("local addr").port();
+        assert!(
+            !preflight_port_free(port),
+            "actively bound port {port} must probe as occupied",
+        );
+    }
+
+    #[test]
+    fn allocate_next_port_skips_real_bound_listener() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral listener");
+        let bound_port = listener.local_addr().expect("local addr").port();
+
+        let mut inner = ManagerInner {
+            instances: LruCache::new(NonZeroUsize::new(1).unwrap()),
+            next_port: bound_port,
+            starting_port: bound_port,
+        };
+        let allocated = allocate_next_port_with_probe(&mut inner, preflight_port_free)
+            .expect("allocator should sweep past a real bound port");
+        assert_ne!(
+            allocated, bound_port,
+            "allocator must not hand out a port that is actively bound",
+        );
+    }
+
+    #[test]
     fn status_matches_rejects_suffix_collision() {
         let status = status_result(Some("/tmp/foo.perfetto-trace.1 (0 MB)"));
         let expected = PathBuf::from("/tmp/foo.perfetto-trace");
@@ -1303,6 +1331,40 @@ mod tests {
         assert!(
             msg.contains("this-trace-does-not-exist.perfetto-trace"),
             "error should include the trace path, got: {msg}",
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn get_client_surfaces_spawn_error_for_non_executable_binary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let non_exec = tmp.path().join("fake_tp_shell");
+        std::fs::write(&non_exec, b"fake").expect("write fake binary");
+        std::fs::set_permissions(&non_exec, std::fs::Permissions::from_mode(0o644))
+            .expect("strip execute bit");
+
+        let trace = tmp.path().join("fake.perfetto-trace");
+        std::fs::write(&trace, b"not a real trace").expect("write trace placeholder");
+
+        let manager = TraceProcessorManager::new_with_binary(non_exec.clone(), 1);
+        let err = manager
+            .get_client(&trace)
+            .await
+            .expect_err("non-executable binary must fail at spawn");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("failed to spawn"),
+            "error should surface the spawn-failure context, got: {msg}",
+        );
+        assert!(
+            msg.contains("fake_tp_shell"),
+            "error should include the binary name, got: {msg}",
+        );
+        assert!(
+            msg.to_lowercase().contains("permission denied"),
+            "error chain should surface the OS-level permission denial, got: {msg}",
         );
     }
 

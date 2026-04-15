@@ -102,6 +102,15 @@ pub struct ChromeScrollJankParams {
     pub trace_path: String,
 }
 
+/// SQL driving `chrome_scroll_jank_summary`. Exposed so integration tests
+/// can exercise the exact statement the tool ships, preventing silent drift.
+pub const CHROME_SCROLL_JANK_SUMMARY_SQL: &str =
+    "INCLUDE PERFETTO MODULE chrome.scroll_jank.scroll_jank_v3; \
+     SELECT cause_of_jank, COUNT(*) AS jank_count \
+     FROM chrome_janky_frames \
+     GROUP BY cause_of_jank \
+     ORDER BY jank_count DESC";
+
 // -- Tool implementations --------------------------------------------------
 
 #[tool_router(router = tool_router)]
@@ -317,13 +326,8 @@ impl PerfettoMcpServer {
         Parameters(params): Parameters<ChromeScrollJankParams>,
     ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
-        let sql = "INCLUDE PERFETTO MODULE chrome.scroll_jank.scroll_jank_v3; \
-                   SELECT cause_of_jank, COUNT(*) AS jank_count \
-                   FROM chrome_janky_frames \
-                   GROUP BY cause_of_jank \
-                   ORDER BY jank_count DESC";
         let rows = client
-            .query(sql)
+            .query(CHROME_SCROLL_JANK_SUMMARY_SQL)
             .await
             .map_err(format_chrome_scroll_jank_error)?;
         if rows.is_empty() {

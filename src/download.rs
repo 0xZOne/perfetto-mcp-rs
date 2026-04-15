@@ -498,6 +498,56 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn download_binary_surfaces_http_5xx_status() {
+        // Exercises the `.error_for_status()` + URL-scrub branch the drop-connection test cannot reach.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 1];
+                let _ = stream.read(&mut buf).await;
+                let body = b"upstream unavailable";
+                let headers = format!(
+                    "HTTP/1.1 500 Internal Server Error\r\n\
+                     Content-Length: {}\r\n\
+                     Connection: close\r\n\
+                     \r\n",
+                    body.len(),
+                );
+                let _ = stream.write_all(headers.as_bytes()).await;
+                let _ = stream.write_all(body).await;
+                let _ = stream.shutdown().await;
+            }
+        });
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("trace_processor_shell");
+        let cfg = DownloadConfig::new(format!(
+            "http://{addr}/perfetto?token=HTTP500_SHOULD_NOT_LEAK"
+        ));
+        let err = download_binary(&cfg, &dest).await.unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("fetching"),
+            "error should surface the fetch context, got: {msg}"
+        );
+        assert!(
+            msg.contains("500"),
+            "error should mention the upstream HTTP status, got: {msg}"
+        );
+        assert!(
+            !msg.contains("HTTP500_SHOULD_NOT_LEAK"),
+            "URL query token leaked in error chain: {msg}"
+        );
+        assert!(
+            !dest.exists(),
+            "a failed download must not leave the cached binary in place"
+        );
+    }
+
     #[test]
     fn binary_url_tolerates_trailing_slash_in_base() {
         let cfg = DownloadConfig::from_override(Some("https://mirror.example/".to_string()));

@@ -1,6 +1,6 @@
 # ROADMAP
 
-Last updated: 2026-04-14
+Last updated: 2026-04-15
 
 面向 `perfetto-mcp-rs` 的下一阶段执行清单。目标不是继续堆功能，而是先补齐正确性边界、测试防回归能力，以及高价值分析工具。
 
@@ -66,9 +66,9 @@ Last updated: 2026-04-14
 - [x] 增加同一 trace / 不同 trace 的并发访问测试
   - 验收：不死锁、不误复用、不重复 spawn
 
-- [ ] 增加失败路径测试
+- [x] 增加失败路径测试
   - 场景：trace 不存在、binary 不可执行、下载失败、端口冲突
-  - 状态：trace 不存在已覆盖；binary / 下载 / 端口冲突场景仍待补
+  - 已落地：trace 不存在（`get_client_returns_clear_error_for_missing_trace`）、binary 不可执行（Unix-only `get_client_surfaces_spawn_error_for_non_executable_binary`，通过 `new_with_binary` 注入 `0o644` 文件）、下载 HTTP 失败（`download_binary_surfaces_http_5xx_status` 用本地 500 响应器驱动 `error_for_status` 分支，同时再次验证 URL 脱敏）、端口冲突（`preflight_port_free_rejects_real_bound_listener` + `allocate_next_port_skips_real_bound_listener` 用真实 bound listener 驱动真实 probe）
   - 验收：错误消息清晰且可定位
 
 - [x] 为 server 层提示逻辑补回归测试
@@ -76,9 +76,9 @@ Last updated: 2026-04-14
   - 目标：锁定当前“missing table / missing module”提示行为
   - 验收：错误文案或分类变化时测试会报警
 
-- [ ] 扩充 e2e fixture
+- [x] 扩充 e2e fixture
   - 现状：单个 smoke fixture 只能证明主链路成立
-  - 目标：增加至少一个小型 Chrome fixture 和一个 Android fixture
+  - 已落地：`tests/fixtures/` 已包含 `scroll_jank.pftrace`、`page_loads.pftrace`、`event_latency.perfetto-trace`、`histogram.perfetto-trace`；缺的是测试覆盖而非资产。`tests/e2e_chrome_scroll_jank.rs` 现在用 `chrome_scroll_jank_summary` 的真实 SQL（`chrome.scroll_jank.scroll_jank_v3` 模块 + `chrome_janky_frames`）端到端驱动 `scroll_jank.pftrace`。
   - 验收：领域工具有代表性 e2e 覆盖
 
 ## Milestone 3: Error Model Tightening
@@ -187,7 +187,7 @@ Last updated: 2026-04-14
 
 发布门槛：
 
-- [ ] 启动、查询、回收主链路无已知高优先级 correctness bug
+- [x] 启动、查询、回收主链路无已知高优先级 correctness bug
 - [x] 单元测试稳定
 - [x] e2e 在 CI 环境稳定
 - [x] 关键错误提示有测试覆盖

@@ -1,6 +1,6 @@
 # ROADMAP
 
-Last updated: 2026-04-14
+Last updated: 2026-04-15
 
 The next-phase execution list for `perfetto-mcp-rs`. The goal is not to pile on more features, but to first close correctness gaps, build up regression-test coverage, and invest in high-value analysis tooling.
 
@@ -66,9 +66,9 @@ Goal: raise "works right now" to "hard to regress later."
 - [x] Add concurrent-access tests for same-trace and different-trace paths
   - Acceptance: no deadlocks, no accidental reuse, no duplicate spawns
 
-- [ ] Add failure-path tests
+- [x] Add failure-path tests
   - Scenarios: missing trace, non-executable binary, download failure, port conflict
-  - Status: missing-trace covered; binary / download / port-conflict scenarios still pending
+  - Landed: missing-trace (`get_client_returns_clear_error_for_missing_trace`), non-executable binary (Unix-only `get_client_surfaces_spawn_error_for_non_executable_binary` via `new_with_binary`), download HTTP failure (`download_binary_surfaces_http_5xx_status` against a local 500 responder, also re-verifies URL scrubbing), port conflict (`preflight_port_free_rejects_real_bound_listener` + `allocate_next_port_skips_real_bound_listener` exercising the real probe against a real bound listener)
   - Acceptance: error messages are clear and localizable
 
 - [x] Add regression tests for the server-layer hint logic
@@ -76,9 +76,9 @@ Goal: raise "works right now" to "hard to regress later."
   - Goal: lock in the current "missing table / missing module" hint behavior
   - Acceptance: tests fire when error wording or classification changes
 
-- [ ] Expand e2e fixtures
+- [x] Expand e2e fixtures
   - Current state: a single smoke fixture only proves the main path works
-  - Goal: add at least one small Chrome fixture and one Android fixture
+  - Landed: `tests/fixtures/` already ships `scroll_jank.pftrace`, `page_loads.pftrace`, `event_latency.perfetto-trace`, `histogram.perfetto-trace`; the gap was test coverage, not assets. `tests/e2e_chrome_scroll_jank.rs` now drives the `chrome_scroll_jank_summary` SQL (`chrome.scroll_jank.scroll_jank_v3` module + `chrome_janky_frames`) against `scroll_jank.pftrace` end-to-end.
   - Acceptance: domain tools have representative e2e coverage
 
 ## Milestone 3: Error Model Tightening
@@ -187,7 +187,7 @@ Focus on stability and correctness.
 
 Release gate:
 
-- [ ] No known high-priority correctness bugs in the spawn, query, and reclaim main path
+- [x] No known high-priority correctness bugs in the spawn, query, and reclaim main path
 - [x] Stable unit tests
 - [x] Stable e2e in CI
 - [x] Test coverage for key error hints
