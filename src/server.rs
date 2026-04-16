@@ -13,7 +13,7 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{PerfettoError, QueryErrorKind};
+use crate::error::{PerfettoError, QueryErrorKind, MAX_ROWS};
 use crate::tp_manager::TraceProcessorManager;
 
 /// MCP server providing Perfetto trace analysis tools.
@@ -146,9 +146,17 @@ impl PerfettoMcpServer {
     #[tool(
         name = "execute_sql",
         description = "Execute a PerfettoSQL query against a loaded trace. Returns a JSON \
-                       array of row objects. Maximum 5000 rows returned — prefer aggregates \
-                       (COUNT, SUM, AVG, GROUP BY) over raw rows. The trace_path must \
-                       reference a previously loaded trace.\n\
+                       array of row objects.\n\
+                       \n\
+                       IMPORTANT: Results are capped at 5000 rows — queries exceeding this \
+                       limit will fail. Results should be aggregates rather than raw row \
+                       data, and reuse stdlib views where possible.\n\
+                       \n\
+                       `INCLUDE PERFETTO MODULE` must be done in a separate `execute_sql` \
+                       call, or it messes up the SQL results.\n\
+                       \n\
+                       The trace_path must reference a previously loaded trace.\n\
+                       \n\
                        Documentation:\n\
                        - Stdlib index: https://perfetto.dev/docs/analysis/stdlib-docs\n\
                        - PerfettoSQL syntax: https://perfetto.dev/docs/analysis/perfetto-sql-syntax\n\
@@ -383,10 +391,10 @@ fn format_execute_sql_error(err: PerfettoError) -> String {
              first."
         ),
         PerfettoError::QueryError { message, .. } => format!("SQL error: {message}"),
-        PerfettoError::TooManyRows => "Query returned more than 5000 rows. Results should \
-                 be aggregates (COUNT, SUM, AVG, GROUP BY) rather than raw rows. Add \
-                 aggregation, or narrow with a WHERE filter, or add a LIMIT."
-            .to_owned(),
+        PerfettoError::TooManyRows => format!(
+            "Query returned more than {MAX_ROWS} rows. Results should be aggregates \
+             rather than raw row data. Reuse stdlib views where possible."
+        ),
         other => format!("Query failed: {other}"),
     }
 }
@@ -535,8 +543,27 @@ mod tests {
             "row-cap message must name the limit, got: {formatted}",
         );
         assert!(
-            formatted.contains("LIMIT"),
-            "row-cap message must suggest LIMIT, got: {formatted}",
+            formatted.contains("aggregate"),
+            "row-cap message must push agents toward aggregation, got: {formatted}",
+        );
+    }
+
+    // The description is a proc-macro string literal so it can't interpolate
+    // MAX_ROWS. Pin the literal against the constant so changing MAX_ROWS
+    // without updating the description fails here instead of misleading agents.
+    #[test]
+    fn execute_sql_description_matches_max_rows_constant() {
+        let server = test_server();
+        let tool = server
+            .tool_router
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == "execute_sql")
+            .expect("execute_sql tool must exist");
+        let desc = tool.description.as_deref().unwrap_or("");
+        assert!(
+            desc.contains(&MAX_ROWS.to_string()),
+            "execute_sql description must mention MAX_ROWS ({MAX_ROWS}), got: {desc}",
         );
     }
 
