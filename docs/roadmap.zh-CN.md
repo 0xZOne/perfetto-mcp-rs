@@ -1,6 +1,6 @@
 # ROADMAP
 
-Last updated: 2026-04-15
+Last updated: 2026-04-16
 
 面向 `perfetto-mcp-rs` 的下一阶段执行清单。目标不是继续堆功能，而是先补齐正确性边界、测试防回归能力，以及高价值分析工具。
 
@@ -15,14 +15,12 @@ Last updated: 2026-04-15
 
 ## Priority Order
 
-当前建议的优先级顺序：
+v0.2 已落地正确性修复、回归测试、错误模型收敛和下载硬化。当前优先级针对 v0.3 及之后：
 
-1. 修 `wait_ready` 的实例身份校验问题
-2. 持续消费并记录子进程 `stderr`
-3. 为 `tp_manager` 补关键回归测试
-4. 降低 server 层对字符串匹配的依赖
-5. 强化下载链路
-6. 再扩高价值领域工具和 fixture
+1. 落地 `stdlib-quickref` MCP Resource（若缺失，agent 会退化为 `LIKE '%xxx%'` 扫描，后续所有领域工具的收益都会打折）
+2. 落地 `list_stdlib_modules`（列举能力，依赖 stdlib 的 M5 工具都建立在它之上）
+3. 落地 Milestone 5 中的 Chrome / Android / CPU 领域工具
+4. 待 v0.3 到用户手上后，再推进 Milestone 6 的 `execute_sql` summary 模式和 schema 缓存
 
 ## Milestone 1: Correctness And Runtime Hardening
 
@@ -122,33 +120,92 @@ Last updated: 2026-04-15
 
 目标：从“通用 SQL 执行器”升级为“常见 Perfetto 场景分析工具”。
 
-- [ ] 新增 `cpu_hot_threads`
-  - 输出高 CPU 占用线程及关联进程
-  - 验收：适用于 Android/Linux 常见 trace
+### Conventions
 
-- [ ] 新增 `process_cpu_breakdown`
-  - 输出进程级 CPU 时间分布
-  - 验收：能快速定位最重进程
+- **工具命名**：通用工具使用 `{verb}_{noun}`（`list_*`、`load_*`、`execute_*`）；分析工具使用 `{domain}_{metric}_summary`；`_suspects` / `_hotspots` / `_breakdown` 在 `_summary` 不贴切时可接受。
+- **描述规范**：每个 M5 新增工具描述包含一句 "USE THIS WHEN"（agent 何时该选它）和一句 "NEXT STEPS"（调完之后该做什么）。借鉴自 antarikshc/perfetto-mcp，按 single-signal 规则保持精简。
+- **Fixture 来源**：Android 样本从 `chromium/.../third_party/perfetto/test/data/` 取，该目录 GCS-backed——`.sha256` 指针在树里，二进制通过 `https://storage.googleapis.com/perfetto/test_data/{filename}-{digest}` 公开分发。按工具落地时再单独拷贝，避免仓库膨胀。
 
-- [ ] 新增 `memory_growth_summary`
-  - 输出内存增长显著的进程或计数器
-  - 验收：可用于粗筛内存异常对象
-
-- [ ] 新增 `android_startup_summary`
-  - 聚焦应用启动关键阶段
-  - 验收：能给出启动耗时和主要阶段拆解
-
-- [ ] 新增 `chrome_frame_timeline_summary`
-  - 聚焦 frame timeline / jank 场景
-  - 验收：与现有 `chrome_scroll_jank_summary` 形成互补
-
-- [ ] 新增 `anr_suspects`
-  - 聚焦主线程卡顿、binder、锁等待等常见线索
-  - 验收：可给出初步怀疑对象，而不是只返回原始表
+### Foundation
 
 - [ ] 新增 `list_stdlib_modules`
-  - 目标：降低 agent 对预先知道模块名的依赖
-  - 验收：可列出可发现的 stdlib 模块或相关元数据
+  - 枚举可发现的 stdlib 模块，避免 agent 必须事先知道模块名；是后续 stdlib 依赖型 M5 工具的基础
+  - 验收：返回模块 key（可用时附短描述）；对任意 trace 都能工作
+  - Fixture：复用已有任意 fixture
+
+### Chrome Tools
+
+- [ ] 新增 `chrome_frame_timeline_summary`
+  - frame timeline / jank 聚合，与现有 `chrome_scroll_jank_summary` 互补
+  - 验收：汇总预期 vs 实际 frame 时序，并归因 jank 来源
+  - Fixture：复用 `scroll_jank.pftrace`
+
+- [ ] 新增 `chrome_blocking_calls_summary`
+  - 汇总 `ScopedBlockingCallWithBaseSyncPrimitives`（Chrome 同步 IO / 同步等待埋点）——按线程、进程、频次、累计阻塞时间排序。实测 session 中 Worker / I/O 线程上出现 15K+ 次，是 file-mapping 和字体加载卡顿的直接来源。
+  - 验收：给出排序结果，并明确标记哪些线程上阻塞可接受（Utility、ThreadPool\*），哪些线程上阻塞是延迟来源（Worker、Renderer）
+  - Fixture：自录一个带同步文件流量的 Chrome trace；或在 `trace_file_mapping_small_file` 的脱敏副本就绪后复用
+
+### Android Tools
+
+- [ ] 新增 `android_startup_summary`
+  - 聚焦冷启动 / 温启动关键阶段
+  - 验收：给出启动总耗时与主要阶段拆解
+  - Fixture：`api31_startup_cold.perfetto-trace`（体积小、可复现，冷启动信号最干净）
+
+- [ ] 新增 `anr_suspects`
+  - 单次产出主线程卡顿、binder 等待、锁竞争的怀疑对象排序；多信号根因关联留到后续 milestone
+  - 验收：给出排名后的怀疑对象，而不是原始表
+  - Fixture：`android_anr.pftrace.gz`
+
+- [ ] 新增 `list_macrobenchmark_slices` **(fixture blocked)**
+  - 列出 `measureBlock` slice 并关联 app / test，对标 `com.google.PerfettoMcp` 的 `perfetto-list-macrobenchmark-slices`
+  - 验收：输出结构与上游工具一致
+  - Fixture：chromium 树无现成样本，需要自录或取自 AndroidX Benchmark。fixture 未就绪前，v0.3 不可执行。
+
+### Thread-Level Tools（跨平台）
+
+- [ ] 新增 `main_thread_hotspots`
+  - 按进程列出主线程 top-N 最长 slice；ANR / jank 排查的常规起点。凡是有 thread track 的 trace 都适用（Android、Chrome、纯 Linux），不局限于 Android。
+  - 验收：排名 slice 列表，包含进程、时长、时间戳
+  - Fixture：任一 Android 启动 trace（复用 `api31_startup_cold.perfetto-trace`）
+
+### CPU / Memory Tools
+
+- [ ] 新增 `cpu_hot_threads`
+  - 高 CPU 占用线程及其所属进程
+  - 验收：适用于常见 Android / Linux trace
+  - Fixture：`android_sched_and_ps.pb` 或 `example_android_trace_30s.pb`
+
+- [ ] 新增 `process_cpu_breakdown`
+  - 进程级 CPU 时间分布，补齐 `cpu_hot_threads`
+  - 验收：最重进程排在前面
+  - Fixture：同 `cpu_hot_threads`
+
+- [ ] 新增 `memory_growth_summary`
+  - 内存增长显著的进程或计数器
+  - 验收：用作内存异常粗筛
+  - Fixture：通用 Android trace（无专用候选；stretch-goal）
+
+### Supplementary Tools (v0.3 可选)
+
+- [ ] 新增 `thread_contention_summary`
+  - 汇总 `monitor_contention` 事件——Android ANR / jank 的头号根因
+  - 验收：排名 contention 事件，含 holder / waiter 详情
+  - Fixture：`android_monitor_contention_trace.atr`
+
+- [ ] 新增 `binder_transaction_summary`
+  - 按接口统计 binder IPC 延迟和事务数
+  - 验收：客户端 / 服务端延迟百分位
+  - Fixture：`android_binder_metric_trace.atr`
+
+### MCP Resource
+
+- [ ] 以 MCP Resource 形式暴露 stdlib 速查表 **(v0.3 P0——优先于领域工具)**
+  - URI：`resource://perfetto-mcp/stdlib-quickref`
+  - 精选最实用的 stdlib 模块，附一句话领域提示；与 `list_stdlib_modules` 互补——tool 负责枚举，resource 负责教学
+  - 灵感来自 antarikshc/perfetto-mcp 的 MCP Resources 模式
+  - 为什么 P0：实测 session 反复出现——agent 不知道 stdlib 模块的存在时，会退化为 `SELECT DISTINCT cat FROM slice` + `LIKE '%xxx%'` 扫描。这个 resource 是后续所有 M5 领域工具的放大器。
+  - 验收：agent 无需 `execute_sql` 即可获取
 
 ## Milestone 6: Performance And Context Efficiency
 
@@ -163,7 +220,7 @@ Last updated: 2026-04-15
   - 验收：形成明确方案，决定保留硬上限还是升级到分页/流式
 
 - [ ] 为高频 schema 查询加缓存
-  - 场景：`list_tables`、`table_structure`
+  - 场景：`list_tables`、`list_table_structure`
   - 验收：重复查询减少不必要 RPC
 
 - [ ] 支持 query cancellation
@@ -176,7 +233,7 @@ Last updated: 2026-04-15
 
 ## Suggested Release Plan
 
-## v0.2
+### v0.2
 
 聚焦稳定性和正确性。
 
@@ -192,21 +249,23 @@ Last updated: 2026-04-15
 - [x] e2e 在 CI 环境稳定
 - [x] 关键错误提示有测试覆盖
 
-## v0.3
+### v0.3
 
 聚焦高价值分析能力和工具自发现性。
 
-- [ ] 完成 `Milestone 5` 中至少 3 个领域工具
-- [ ] 增加 `list_stdlib_modules`
-- [ ] 为新增工具补 fixture 和 e2e
-- [ ] 对工具描述和返回结构做一轮统一
+- [ ] 落地 `stdlib-quickref` MCP Resource（P0——所有领域工具都依赖 agent 能看到应该 `INCLUDE` 哪些 stdlib 模块）
+- [ ] 落地 `list_stdlib_modules`（后续领域工具的列举基础）
+- [ ] 落地 `Milestone 5` 中至少 3 个领域工具，覆盖至少 2 个场景族（Chrome / Android 启动 / ANR / CPU / 内存）
+- [ ] 为每个新增工具补 fixture 和 e2e，fixture 来自 `test/data/` 的 GCS 指针
+- [ ] 对工具描述按 `USE THIS WHEN` / `NEXT STEPS` 规范做一轮统一
 
 发布门槛：
 
-- [ ] 至少覆盖 CPU、内存、Chrome/Android 中的 2 到 3 个高频场景
+- [ ] `stdlib-quickref` resource 可获取，至少覆盖 Chrome 和 Android 的 stdlib 入口
+- [ ] 至少 3 个新增领域工具覆盖至少 2 个场景族
 - [ ] README 补齐新增工具使用示例
 
-## v1.0
+### v1.0
 
 聚焦“稳定可发布”。
 

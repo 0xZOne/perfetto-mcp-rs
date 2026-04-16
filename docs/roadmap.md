@@ -1,6 +1,6 @@
 # ROADMAP
 
-Last updated: 2026-04-15
+Last updated: 2026-04-16
 
 The next-phase execution list for `perfetto-mcp-rs`. The goal is not to pile on more features, but to first close correctness gaps, build up regression-test coverage, and invest in high-value analysis tooling.
 
@@ -15,14 +15,12 @@ The next-phase execution list for `perfetto-mcp-rs`. The goal is not to pile on 
 
 ## Priority Order
 
-The currently recommended priority order:
+v0.2 has landed correctness, regression tests, error-model tightening, and download hardening. The current priority order targets v0.3 and beyond:
 
-1. Fix the instance-identity check in `wait_ready`
-2. Continuously drain and log child-process `stderr`
-3. Add key regression tests for `tp_manager`
-4. Reduce the server layer's reliance on string matching
-5. Harden the download path
-6. Then expand high-value domain tools and fixtures
+1. Ship the `stdlib-quickref` MCP Resource (without it, agents fall back to `LIKE '%xxx%'` scans and the remaining domain tools see reduced payoff)
+2. Ship `list_stdlib_modules` (enumeration foundation for stdlib-dependent M5 tools)
+3. Ship Chrome / Android / CPU domain tools from Milestone 5
+4. Pick up `execute_sql` summary modes and schema caching from Milestone 6 once v0.3 is in users' hands
 
 ## Milestone 1: Correctness And Runtime Hardening
 
@@ -122,33 +120,92 @@ Goal: make install, upgrade, and cache recovery more reliable.
 
 Goal: upgrade from "generic SQL executor" to "analysis tool for common Perfetto scenarios."
 
-- [ ] Add `cpu_hot_threads`
-  - Reports high-CPU threads and their associated processes
-  - Acceptance: applicable to common Android/Linux traces
+### Conventions
 
-- [ ] Add `process_cpu_breakdown`
-  - Reports per-process CPU-time distribution
-  - Acceptance: quickly surfaces the heaviest processes
+- **Tool naming**: `{verb}_{noun}` for utilities (`list_*`, `load_*`, `execute_*`); `{domain}_{metric}_summary` for analysis tools; `_suspects` / `_hotspots` / `_breakdown` accepted where `_summary` does not fit.
+- **Description discipline**: every new M5 tool description includes one "USE THIS WHEN" sentence (when the agent should pick it) and one "NEXT STEPS" sentence (what to call after). Borrowed from antarikshc/perfetto-mcp, kept minimal per the single-signal convention.
+- **Fixture source**: Android-flavored samples come from `chromium/.../third_party/perfetto/test/data/`, which is GCS-backed — `.sha256` pointers are in-tree, binaries are served publicly at `https://storage.googleapis.com/perfetto/test_data/{filename}-{digest}`. Copy per-tool at implementation time rather than bulk-importing, to limit repo bloat.
 
-- [ ] Add `memory_growth_summary`
-  - Reports processes or counters with significant memory growth
-  - Acceptance: usable as a first-pass filter for memory anomalies
-
-- [ ] Add `android_startup_summary`
-  - Focused on the key phases of app startup
-  - Acceptance: produces startup duration and main-phase breakdown
-
-- [ ] Add `chrome_frame_timeline_summary`
-  - Focused on frame-timeline / jank scenarios
-  - Acceptance: complements the existing `chrome_scroll_jank_summary`
-
-- [ ] Add `anr_suspects`
-  - Focused on main-thread stalls, binder, lock waits, and other common leads
-  - Acceptance: produces initial suspects, not just raw tables
+### Foundation
 
 - [ ] Add `list_stdlib_modules`
-  - Goal: reduce agents' dependence on knowing module names in advance
-  - Acceptance: enumerates discoverable stdlib modules or related metadata
+  - Enumerates discoverable stdlib modules so agents do not have to know module names in advance; foundation for every stdlib-dependent M5 tool
+  - Acceptance: returns module keys (and short descriptions where available); works against any trace
+  - Fixture: reuse any existing
+
+### Chrome Tools
+
+- [ ] Add `chrome_frame_timeline_summary`
+  - Frame-timeline / jank aggregation, complementing the existing `chrome_scroll_jank_summary`
+  - Acceptance: summarizes expected vs. actual frame timing with jank-source attribution
+  - Fixture: reuse `scroll_jank.pftrace`
+
+- [ ] Add `chrome_blocking_calls_summary`
+  - Surfaces `ScopedBlockingCallWithBaseSyncPrimitives` slices (Chrome's sync-IO / sync-wait marker) ranked by thread, process, frequency, and total blocking time. Observed in live sessions on Worker / I/O threads with 15K+ occurrences driving file-mapping and font-load stalls.
+  - Acceptance: ranked output, with a clear flag for non-UI threads where blocking is expected (Utility, ThreadPool\*) vs. Worker / Renderer threads where blocking is a latency source
+  - Fixture: capture a self-recorded Chrome trace with sync filesystem traffic, or reuse the `trace_file_mapping_small_file` trace referenced in M5 review notes once a sanitized copy is available
+
+### Android Tools
+
+- [ ] Add `android_startup_summary`
+  - Key phases of cold / warm app startup
+  - Acceptance: total startup duration plus per-phase breakdown
+  - Fixture: `api31_startup_cold.perfetto-trace` (small, deterministic, cold-start is the cleanest signal)
+
+- [ ] Add `anr_suspects`
+  - Single-pass ranking of main-thread stalls, binder waits, and lock contention; multi-signal root-cause correlation is deferred to a later milestone
+  - Acceptance: produces ranked suspects, not raw tables
+  - Fixture: `android_anr.pftrace.gz`
+
+- [ ] Add `list_macrobenchmark_slices` **(fixture blocked)**
+  - Enumerates `measureBlock` slices with app / test associations, mirroring `com.google.PerfettoMcp`'s `perfetto-list-macrobenchmark-slices`
+  - Acceptance: same output shape as the upstream tool
+  - Fixture: none in the chromium tree; self-record or capture from AndroidX Benchmark before picking this up. Not v0.3-actionable until a fixture lands.
+
+### Thread-Level Tools (cross-cutting)
+
+- [ ] Add `main_thread_hotspots`
+  - Top-N longest main-thread slices per process; common first-drill for ANR / jank investigations. Applies to any trace with thread tracks (Android, Chrome, plain Linux), not Android-only.
+  - Acceptance: ranked slice list with process, duration, timestamp
+  - Fixture: any Android startup trace (reuse `api31_startup_cold.perfetto-trace`)
+
+### CPU / Memory Tools
+
+- [ ] Add `cpu_hot_threads`
+  - High-CPU threads with their processes
+  - Acceptance: applicable to common Android / Linux traces
+  - Fixture: `android_sched_and_ps.pb` or `example_android_trace_30s.pb`
+
+- [ ] Add `process_cpu_breakdown`
+  - Per-process CPU-time distribution, complementary to `cpu_hot_threads`
+  - Acceptance: surfaces the heaviest processes first
+  - Fixture: same as `cpu_hot_threads`
+
+- [ ] Add `memory_growth_summary`
+  - Processes or counters with significant memory growth
+  - Acceptance: first-pass filter for memory anomalies
+  - Fixture: generic Android trace (no specialized candidate; stretch-goal)
+
+### Supplementary Tools (optional for v0.3)
+
+- [ ] Add `thread_contention_summary`
+  - Summarizes `monitor_contention` events — the #1 root cause behind Android ANR / jank
+  - Acceptance: ranked contention events with holder / waiter details
+  - Fixture: `android_monitor_contention_trace.atr`
+
+- [ ] Add `binder_transaction_summary`
+  - Binder IPC latency and transaction counts per interface
+  - Acceptance: client / server latency percentiles
+  - Fixture: `android_binder_metric_trace.atr`
+
+### MCP Resource
+
+- [ ] Expose a stdlib quick-reference as an MCP Resource **(v0.3 P0 — lands before domain tools)**
+  - URI: `resource://perfetto-mcp/stdlib-quickref`
+  - Curated table of the most useful stdlib modules with one-line domain hints, complementing `list_stdlib_modules` — the tool enumerates, the resource teaches
+  - Inspired by antarikshc/perfetto-mcp's MCP Resources pattern
+  - Why P0: live sessions repeatedly show agents falling back to `SELECT DISTINCT cat FROM slice` + `LIKE '%xxx%'` scans when they do not know stdlib modules exist. This resource is a force-multiplier for every subsequent M5 domain tool.
+  - Acceptance: agents can retrieve it without an `execute_sql` call
 
 ## Milestone 6: Performance And Context Efficiency
 
@@ -163,7 +220,7 @@ Goal: improve the experience with large traces and complex agent workflows.
   - Acceptance: a clear decision on keeping the hard cap vs. upgrading to pagination/streaming
 
 - [ ] Cache high-frequency schema queries
-  - Scenarios: `list_tables`, `table_structure`
+  - Scenarios: `list_tables`, `list_table_structure`
   - Acceptance: repeated queries avoid unnecessary RPCs
 
 - [ ] Support query cancellation
@@ -176,7 +233,7 @@ Goal: improve the experience with large traces and complex agent workflows.
 
 ## Suggested Release Plan
 
-## v0.2
+### v0.2
 
 Focus on stability and correctness.
 
@@ -192,21 +249,23 @@ Release gate:
 - [x] Stable e2e in CI
 - [x] Test coverage for key error hints
 
-## v0.3
+### v0.3
 
 Focus on high-value analysis capability and tool discoverability.
 
-- [ ] Complete at least 3 domain tools from `Milestone 5`
-- [ ] Add `list_stdlib_modules`
-- [ ] Add fixtures and e2e for the new tools
-- [ ] One pass to unify tool descriptions and return shapes
+- [ ] Ship the `stdlib-quickref` MCP Resource (P0 — every domain tool depends on agents knowing which stdlib modules to `INCLUDE`)
+- [ ] Ship `list_stdlib_modules` (foundation for the domain tools below)
+- [ ] Ship at least 3 domain tools from `Milestone 5`, spanning at least 2 scenario families (Chrome / Android startup / ANR / CPU / memory)
+- [ ] Add fixtures and e2e for each new tool, sourced from the `test/data/` GCS pointers
+- [ ] One pass to unify tool descriptions against the `USE THIS WHEN` / `NEXT STEPS` convention
 
 Release gate:
 
-- [ ] Covers at least 2 to 3 high-frequency scenarios across CPU, memory, and Chrome/Android
+- [ ] `stdlib-quickref` resource is retrievable and covers at least the Chrome and Android stdlib entry points
+- [ ] At least 3 new domain tools span at least 2 scenario families
 - [ ] README extended with usage examples for the new tools
 
-## v1.0
+### v1.0
 
 Focus on "stable, shippable."
 
