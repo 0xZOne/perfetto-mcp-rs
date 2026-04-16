@@ -14,7 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{PerfettoError, QueryErrorKind, MAX_ROWS};
-use crate::tp_manager::TraceProcessorManager;
+use crate::tp_manager::{loaded_name_matches, strip_size_suffix, TraceProcessorManager};
 
 /// MCP server providing Perfetto trace analysis tools.
 #[derive(Debug, Clone)]
@@ -39,7 +39,7 @@ impl ServerHandler for PerfettoMcpServer {
             instructions: Some(
                 "Perfetto trace analysis server. Start by calling load_trace \
                  with a path to a .perfetto-trace or .pftrace file, then use \
-                 list_tables and table_structure to discover the schema, and \
+                 list_tables and list_table_structure to discover the schema, and \
                  execute_sql to query the trace data."
                     .into(),
             ),
@@ -132,14 +132,13 @@ impl PerfettoMcpServer {
             .await
             .map_err(|e| format!("Failed to get status: {e}"))?;
 
-        let loaded = status
-            .loaded_trace_name
-            .unwrap_or_else(|| params.trace_path.clone());
+        let display =
+            format_loaded_trace_display(&params.trace_path, status.loaded_trace_name.as_deref());
 
         Ok(format!(
-            "Trace loaded successfully: {loaded}\n\
+            "Trace loaded successfully: {display}\n\
              Use list_tables to see available tables, then \
-             table_structure to see column details."
+             list_table_structure to see column details."
         ))
     }
 
@@ -184,7 +183,7 @@ impl PerfettoMcpServer {
         name = "list_tables",
         description = "List all tables and views available in the loaded trace. Optionally \
                        filter by a GLOB pattern (e.g. 'chrome_*', 'slice*'). Returns table \
-                       names that can be passed to table_structure or used in execute_sql. \
+                       names that can be passed to list_table_structure or used in execute_sql. \
                        Internal stdlib tables (names starting with `_`) are hidden by \
                        default; pass an explicit GLOB pattern to bypass the filter. If a \
                        table you expect based on public samples or documentation is not \
@@ -233,11 +232,11 @@ impl PerfettoMcpServer {
     }
 
     #[tool(
-        name = "table_structure",
+        name = "list_table_structure",
         description = "Show the column names and types for a specific table or view. \
                        Use this to understand the schema before writing SQL queries."
     )]
-    async fn table_structure(
+    async fn list_table_structure(
         &self,
         Parameters(params): Parameters<TableStructureParams>,
     ) -> Result<String, String> {
@@ -386,7 +385,7 @@ fn format_execute_sql_error(err: PerfettoError) -> String {
             message,
         } => format!(
             "SQL error: {message}\n\nHint: Call `list_tables` to find the correct table \
-             name, then `table_structure` on it before retrying. Stdlib tables \
+             name, then `list_table_structure` on it before retrying. Stdlib tables \
              (e.g. `chrome_scroll_update_info`) require `INCLUDE PERFETTO MODULE ...;` \
              first."
         ),
@@ -449,6 +448,21 @@ fn sql_string_literal(s: &str) -> Result<String, PerfettoError> {
     Ok(format!("'{}'", s.replace('\'', "''")))
 }
 
+/// Render the load confirmation. If `trace_processor_shell`'s `/status` reports
+/// a name that differs from the filesystem path we loaded — typically because
+/// the trace's recording embedded a different name — surface both so users do
+/// not mistake it for the wrong file loading.
+fn format_loaded_trace_display(trace_path: &str, loaded_trace_name: Option<&str>) -> String {
+    let Some(loaded) = loaded_trace_name else {
+        return trace_path.to_string();
+    };
+    if loaded_name_matches(loaded, Path::new(trace_path)) {
+        trace_path.to_string()
+    } else {
+        format!("{trace_path} (recorded as '{}')", strip_size_suffix(loaded))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,6 +474,52 @@ mod tests {
         assert!(sanitize_glob_param("slice").is_ok());
         assert!(sanitize_glob_param("chrome.scroll_jank").is_ok());
         assert!(sanitize_glob_param("counter_track").is_ok());
+    }
+
+    #[test]
+    fn format_loaded_trace_display_shows_only_path_when_name_matches() {
+        assert_eq!(
+            format_loaded_trace_display("/tmp/trace.pftrace", Some("/tmp/trace.pftrace")),
+            "/tmp/trace.pftrace"
+        );
+        assert_eq!(
+            format_loaded_trace_display("/tmp/trace.pftrace", Some("trace.pftrace")),
+            "/tmp/trace.pftrace"
+        );
+        assert_eq!(
+            format_loaded_trace_display("/tmp/trace.pftrace", Some("/tmp/trace.pftrace (12 MB)")),
+            "/tmp/trace.pftrace"
+        );
+    }
+
+    #[test]
+    fn format_loaded_trace_display_normalizes_windows_paths() {
+        assert_eq!(
+            format_loaded_trace_display(
+                "C:\\Users\\admin\\trace.gz",
+                Some("C:/Users/admin/trace.gz")
+            ),
+            "C:\\Users\\admin\\trace.gz"
+        );
+    }
+
+    #[test]
+    fn format_loaded_trace_display_surfaces_embedded_recording_name() {
+        assert_eq!(
+            format_loaded_trace_display(
+                "C:\\Users\\admin\\trace_pdf.json.gz",
+                Some("scroll_jank.pftrace")
+            ),
+            "C:\\Users\\admin\\trace_pdf.json.gz (recorded as 'scroll_jank.pftrace')"
+        );
+    }
+
+    #[test]
+    fn format_loaded_trace_display_falls_back_when_status_has_no_name() {
+        assert_eq!(
+            format_loaded_trace_display("/tmp/trace.pftrace", None),
+            "/tmp/trace.pftrace"
+        );
     }
 
     #[test]
@@ -646,10 +706,10 @@ mod tests {
                 "chrome_scroll_jank_summary",
                 "execute_sql",
                 "list_processes",
+                "list_table_structure",
                 "list_tables",
                 "list_threads_in_process",
                 "load_trace",
-                "table_structure",
             ],
         );
     }

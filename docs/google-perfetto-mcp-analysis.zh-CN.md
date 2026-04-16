@@ -610,7 +610,7 @@ this.messages = [
 | **Thinking 展示** | `includeThoughts: true`，在 UI 上分开展示 | 取决于客户端（Claude Code 显式展示 thinking） |
 | **查询工具** | `perfetto-execute-query`，description ~1400 字符含 8 个 URL | `execute_sql`，description ~200 字符，无 URL |
 | **列表工具** | `perfetto-list-interesting-tables`（过滤 `sqlite_*` 和 `_*`） | `list_tables`（可选 GLOB 过滤，不预过滤） |
-| **Schema 工具** | `perfetto-list-table-structure` | `table_structure` |
+| **Schema 工具** | `perfetto-list-table-structure` | `list_table_structure` |
 | **加载工具** | 无（onTraceLoad 钩子接入） | `load_trace`（显式） |
 | **领域特化工具** | `list-android-processes`, `list-macrobenchmark-slices` | 无 |
 | **UI 副作用工具** | `show-perfetto-sql-view`, `show-timeline` | 无（headless） |
@@ -919,7 +919,7 @@ for (let step = 0; step < 20; step++) {
 
 **工作量**：走 OpenAI SDK 路径，`baseURL: 'http://localhost:11434/v1'`。改动和 8.2 的 OpenAI 版本一模一样 —— 本质上 Ollama 就是个 OpenAI 协议的实现。
 
-**现实评估**：在 Perfetto 分析这种需要 multi-step tool use 的场景，**本地模型目前能力不足**。经验上，只有 ≥70B 级别的 Llama / Qwen / Mistral 能 reliably 在 2-3 跳之内完成"list_tables → table_structure → execute_sql"的流程，且错误率明显高于 Gemini 2.5 Pro / Claude Opus / GPT-4o。如果目标用户是开发者自己，这个代价可以接受；如果目标是 non-technical end-user，不推荐。
+**现实评估**：在 Perfetto 分析这种需要 multi-step tool use 的场景，**本地模型目前能力不足**。经验上，只有 ≥70B 级别的 Llama / Qwen / Mistral 能 reliably 在 2-3 跳之内完成"list_tables → list_table_structure → execute_sql"的流程，且错误率明显高于 Gemini 2.5 Pro / Claude Opus / GPT-4o。如果目标用户是开发者自己，这个代价可以接受；如果目标是 non-technical end-user，不推荐。
 
 **特殊考虑**：浏览器插件场景下本地模型有一项 UX 优势 —— 数据完全不出本地，trace 里的敏感信息（设备 ID、用户数据、源码 URL）都不外发。对合规敏感的团队而言是必需能力。
 
@@ -958,7 +958,7 @@ for (let step = 0; step < 20; step++) {
 
 回到本项目。我们需不需要做任何"换模型"的准备工作？**几乎不需要**。但有几个要点值得明确：
 
-1. **我们隐式依赖了 MCP 客户端的 agentic 能力**。Claude Code 会自动做 multi-turn tool use；小客户端不会。我们的错误消息 nudge（"call list_tables then table_structure"）隐含假设 LLM 会自己循环 —— 对非 agentic 客户端无效。这不是缺陷，是 MCP 生态的本质 —— 中英 README 中已显式标注 "works best with agentic MCP clients"。
+1. **我们隐式依赖了 MCP 客户端的 agentic 能力**。Claude Code 会自动做 multi-turn tool use；小客户端不会。我们的错误消息 nudge（"call list_tables then list_table_structure"）隐含假设 LLM 会自己循环 —— 对非 agentic 客户端无效。这不是缺陷，是 MCP 生态的本质 —— 中英 README 中已显式标注 "works best with agentic MCP clients"。
 
 2. **我们没有内嵌 chat 的差异化卖点**，但换来的是"任何 MCP 客户端都能用"的通用性。对 Perfetto 用户来说，这两条路径面向不同人群 —— Google 的插件面向 Perfetto UI 老用户，`perfetto-mcp-rs` 面向已经在用 Claude Code / Claude Desktop 的开发者。这是互补的，不是竞争的。
 

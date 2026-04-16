@@ -12,7 +12,7 @@ use perfetto_mcp_rs::tp_manager::{TraceProcessorConfig, TraceProcessorManager};
 
 /// Perfetto trace analysis MCP server.
 ///
-/// Provides load_trace, execute_sql, list_tables, and table_structure tools
+/// Provides load_trace, execute_sql, list_tables, and list_table_structure tools
 /// over the MCP protocol, backed by trace_processor_shell.
 #[derive(Parser, Debug)]
 #[command(version, about)]

@@ -610,7 +610,7 @@ This is a design that warrants caution — the user perceives "a new conversatio
 | **Thinking display** | `includeThoughts: true`, shown separately in the UI | Depends on the client (Claude Code displays thinking explicitly) |
 | **Query tool** | `perfetto-execute-query`, description ~1400 chars with 8 URLs | `execute_sql`, description ~200 chars, no URLs |
 | **Listing tool** | `perfetto-list-interesting-tables` (filters `sqlite_*` and `_*`) | `list_tables` (optional GLOB filter, no pre-filter) |
-| **Schema tool** | `perfetto-list-table-structure` | `table_structure` |
+| **Schema tool** | `perfetto-list-table-structure` | `list_table_structure` |
 | **Load tool** | None (hooked via onTraceLoad) | `load_trace` (explicit) |
 | **Domain-specific tools** | `list-android-processes`, `list-macrobenchmark-slices` | None |
 | **UI side-effect tools** | `show-perfetto-sql-view`, `show-timeline` | None (headless) |
@@ -919,7 +919,7 @@ The situation is roughly the same: all have function calling, all have JS/TS SDK
 
 **Effort**: take the OpenAI SDK path with `baseURL: 'http://localhost:11434/v1'`. The changes are identical to the OpenAI variant in §8.2 — fundamentally Ollama is an implementation of the OpenAI protocol.
 
-**Realistic assessment**: in a scenario like Perfetto analysis that requires multi-step tool use, **local models currently fall short in capability**. Empirically, only Llama / Qwen / Mistral at ≥70B can reliably complete the "list_tables → table_structure → execute_sql" flow in 2-3 hops, and the error rate is visibly higher than Gemini 2.5 Pro / Claude Opus / GPT-4o. If the target user is the developer themselves, this cost may be acceptable; if the target is non-technical end-users, it is not recommended.
+**Realistic assessment**: in a scenario like Perfetto analysis that requires multi-step tool use, **local models currently fall short in capability**. Empirically, only Llama / Qwen / Mistral at ≥70B can reliably complete the "list_tables → list_table_structure → execute_sql" flow in 2-3 hops, and the error rate is visibly higher than Gemini 2.5 Pro / Claude Opus / GPT-4o. If the target user is the developer themselves, this cost may be acceptable; if the target is non-technical end-users, it is not recommended.
 
 **Special consideration**: in the browser-plugin scenario local models offer one UX advantage — data never leaves the local machine, and sensitive information in the trace (device IDs, user data, source URLs) is not exfiltrated. For compliance-sensitive teams this is a must-have capability.
 
@@ -958,7 +958,7 @@ This is precisely the route taken by `perfetto-mcp-rs` — only Google would be 
 
 Returning to this project: do we need to do any "switch model" preparation work? **Almost none**. But several points are worth making explicit:
 
-1. **We implicitly depend on the MCP client's agentic capability**. Claude Code performs multi-turn tool use automatically; smaller clients do not. Our error-message nudges ("call list_tables then table_structure") carry an implicit assumption that the LLM will loop on its own — this is ineffective on non-agentic clients. This is not a defect but the essence of the MCP ecosystem — and both the English and Chinese README already explicitly note "works best with agentic MCP clients".
+1. **We implicitly depend on the MCP client's agentic capability**. Claude Code performs multi-turn tool use automatically; smaller clients do not. Our error-message nudges ("call list_tables then list_table_structure") carry an implicit assumption that the LLM will loop on its own — this is ineffective on non-agentic clients. This is not a defect but the essence of the MCP ecosystem — and both the English and Chinese README already explicitly note "works best with agentic MCP clients".
 
 2. **We lack the differentiator of embedded chat**, but we gain universality — any MCP client can use us. For Perfetto users, the two paths address different audiences: Google's plugin targets long-time Perfetto UI users, while `perfetto-mcp-rs` targets developers already using Claude Code / Claude Desktop. These are complementary rather than competing.
 

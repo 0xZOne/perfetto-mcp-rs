@@ -582,18 +582,22 @@ fn status_matches_expected_trace(status: &StatusResult, expected_trace: &Path) -
         // ago is almost certainly from our child. Trust it.
         return true;
     };
+    loaded_name_matches(loaded_trace_name, expected_trace)
+}
 
-    let loaded_trimmed = strip_size_suffix(loaded_trace_name);
-    let loaded = normalize_status_path(loaded_trimmed);
-    let expected = normalize_status_path(&expected_trace.to_string_lossy());
-    if loaded == expected {
+/// Does `/status`'s `loaded_trace_name` refer to the trace at `expected`?
+/// Matches after stripping Perfetto's `" (NN MB)"` annotation and
+/// normalizing `\` → `/`; also accepts a bare filename match.
+pub(crate) fn loaded_name_matches(loaded: &str, expected: &Path) -> bool {
+    let loaded_norm = normalize_status_path(strip_size_suffix(loaded));
+    let expected_norm = normalize_status_path(&expected.to_string_lossy());
+    if loaded_norm == expected_norm {
         return true;
     }
-
-    if let Some(expected_name) = expected_trace.file_name().and_then(|name| name.to_str()) {
-        return loaded == expected_name;
-    }
-    false
+    expected
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| loaded_norm == name)
 }
 
 fn normalize_status_path(path: &str) -> String {
@@ -602,7 +606,7 @@ fn normalize_status_path(path: &str) -> String {
 
 /// Strip Perfetto's trailing `" (NN MB)"` size annotation so exact
 /// equality works against our canonical trace path.
-fn strip_size_suffix(loaded: &str) -> &str {
+pub(crate) fn strip_size_suffix(loaded: &str) -> &str {
     if !loaded.ends_with(')') {
         return loaded;
     }
