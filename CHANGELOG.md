@@ -2,6 +2,12 @@
 
 ## perfetto-mcp-rs 0.x Changes
 
+### [0.3.0](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.3.0) (April 16, 2026)
+
+- [a0efea7](https://github.com/0xZOne/perfetto-mcp-rs/commit/a0efea7) **Breaking**: rename tool `table_structure` → `list_table_structure` so utility tools consistently use the `list_{noun}` shape (alongside `list_tables`, `list_processes`, `list_threads_in_process`), matching the `verb_noun` convention borrowed from `com.google.PerfettoMcp`. Clients pinned to the old name must update.
+- [bea850c](https://github.com/0xZOne/perfetto-mcp-rs/commit/bea850c) `execute_sql` tool description aligned with `com.google.PerfettoMcp` conventions: stdlib docs index, PerfettoSQL syntax, jank / CPU / memory / battery / log doc links, "INCLUDE PERFETTO MODULE must be in a separate call", "reuse stdlib views where possible". The row-cap guidance collapses to a single signal so nudges do not compete. Agents get richer context for picking the right stdlib module before falling back to `LIKE '%...%'` scans.
+- [a0efea7](https://github.com/0xZOne/perfetto-mcp-rs/commit/a0efea7) `load_trace` now annotates its confirmation string with the embedded recording name when `/status` reports a name that differs from the loaded path, so a trace whose recording metadata uses a different file name is no longer mistaken for "wrong file loaded". `loaded_name_matches` in `tp_manager` is the single shared predicate for both the spawn-time identity check and this display branch.
+
 ### [0.2.0](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.2.0) (April 15, 2026)
 
 - [f1fc78c](https://github.com/0xZOne/perfetto-mcp-rs/commit/f1fc78c) Close out Milestone 2 failure-path coverage: real-probe port-conflict tests, a Unix non-executable-binary spawn-error test driven through `new_with_binary`, and a download HTTP 500 test that exercises the `.error_for_status()` branch the drop-connection test cannot reach. Adds an end-to-end `chrome_scroll_jank_summary` test against the bundled `scroll_jank.pftrace` fixture, driven through a newly exported `server::CHROME_SCROLL_JANK_SUMMARY_SQL` constant so the tool and integration test share one source of truth.
