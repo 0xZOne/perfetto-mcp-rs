@@ -76,7 +76,6 @@ if (Get-Command claude -ErrorAction SilentlyContinue) { claude mcp remove perfet
 | `execute_sql` | Run a PerfettoSQL query, returns JSON rows (max 5000) |
 | `list_processes` | List processes in the trace (pid, name, start/end timestamps) |
 | `list_threads_in_process` | List threads under a process name (up to 2000) |
-| `chrome_scroll_jank_summary` | Summarize Chrome scroll jank by cause (Chrome trace required) |
 
 Typical flow: `load_trace` → `list_tables` to discover the schema →
 `list_table_structure` on interesting tables → `execute_sql` to query. Chrome and

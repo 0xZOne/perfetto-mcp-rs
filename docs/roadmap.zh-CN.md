@@ -76,8 +76,8 @@ v0.2 已落地正确性修复、回归测试、错误模型收敛和下载硬化
 
 - [x] 扩充 e2e fixture
   - 现状：单个 smoke fixture 只能证明主链路成立
-  - 已落地：`tests/fixtures/` 已包含 `scroll_jank.pftrace`、`page_loads.pftrace`、`event_latency.perfetto-trace`、`histogram.perfetto-trace`；缺的是测试覆盖而非资产。`tests/e2e_chrome_scroll_jank.rs` 现在用 `chrome_scroll_jank_summary` 的真实 SQL（`chrome.scroll_jank.scroll_jank_v3` 模块 + `chrome_janky_frames`）端到端驱动 `scroll_jank.pftrace`。
-  - 验收：领域工具有代表性 e2e 覆盖
+  - 已落地（随后在 v0.6 pivot 中部分调整）：初始 ship 了 `scroll_jank.pftrace`、`page_loads.pftrace`、`event_latency.perfetto-trace`、`histogram.perfetto-trace`，以及用 `chrome_scroll_jank_summary` 真实 SQL 端到端驱动 `scroll_jank.pftrace` 的 `tests/e2e_chrome_scroll_jank.rs`。v0.6 后，`page_loads.pftrace` 和 Chrome 域工具测试被移除；`scroll_jank.pftrace` 保留，现由 `tests/e2e_stdlib_include.rs::e2e_stdlib_include_chrome_scroll_jank` 继续跑 `chrome.scroll_jank.scroll_jank_v3` → `chrome_janky_frames`（即 `README.md` 推荐给用户的迁移 SQL）。
+  - 验收：领域工具有代表性 e2e 覆盖（M2 关闭时达成；v0.6 重新分配覆盖，Chrome stdlib 路径未中断）
 
 ## Milestone 3: Error Model Tightening
 
@@ -135,10 +135,35 @@ v0.2 已落地正确性修复、回归测试、错误模型收敛和下载硬化
 
 ### Chrome Tools
 
-- [ ] 新增 `chrome_frame_timeline_summary`
-  - frame timeline / jank 聚合，与现有 `chrome_scroll_jank_summary` 互补
-  - 验收：汇总预期 vs 实际 frame 时序，并归因 jank 来源
-  - Fixture：复用 `scroll_jank.pftrace`
+> **延后 — 策略审查中。** 预置 Chrome 域工具模式在 v0.6 中撤回。v0.3/0.4 样本
+> 确认 `tools/list` 通道有行为激活力，模式选了正确的通道，但实现出来的工具是答案形
+> （固定 SQL、字段窄、预聚合 `GROUP BY`），会把 agent 阻挡在工具返回层面而失去自己
+> 写 SQL 做更深分析的机会。pivot 将 stdlib 引导集中到 `execute_sql` 工具描述
+>（Google `com.google.PerfettoMcp` 单工具模式）。
+>
+> **重开时必须走导航形，不能走答案形。** 导航形工具返回结构化 JSON（模块名、
+> 视图名、列 schema）让 agent 自行组合 SQL，而不是给出预构建的结果。相对现有
+> `list_tables` / `list_table_structure` 的新增价值必须同时满足：(1) 无需先
+> INCLUDE 即可发现 Chrome stdlib 视图，(2) 提供模块→视图分组 + stdlib source
+> 注释文本（语义摘要），(3) 仅暴露稳定的公开 API 子集。不满足 (1)+(2) 的工具
+> 实质是换壳的答案形。
+>
+> **重开标准（事前定义，可证伪）**：仅当 v0.6 观察数据显示 Chrome 相关任务
+> stdlib 使用率 < 50% 时才进入原型阶段。验收要求在 ≥ 10 个样本上同时满足
+> H1（工具调用率 ≥ 50%）、H2（SQL 正确率较 description-only 提升 ≥ 20pp）、
+> H3（总 token 消耗 ≤ description + 一次 WebFetch）。任一不满足则回退到
+> description-only。
+
+- [ ] （重开时必须走导航形，见上）将 `chrome_frame_timeline_summary` 替换为
+  导航形等价工具，例如返回 frame-timeline stdlib 模块 + 视图 + 列 schema 的
+  `list_chrome_frame_views`（模块名须查外部 Chromium checkout
+  `~/chromium/src/third_party/perfetto/src/trace_processor/perfetto_sql/stdlib/chrome/`
+  确认，本仓库无此路径；`chrome.frame_times` 未经验证；已知相关表名包括
+  `expected_frame_timeline_slice` / `actual_frame_timeline_slice`）。原答案形
+  bullet 明确拒绝。
+  - 验收：导航工具返回结构化 JSON schema；H1/H2/H3 证伪条件全部满足。
+  - Fixture：`tests/fixtures/scroll_jank.pftrace` 已保留供 v0.6 Chrome stdlib
+    e2e 测试使用，重开 frame-timeline 工作可直接复用。
 
 - [ ] 新增 `chrome_blocking_calls_summary`
   - 汇总 `ScopedBlockingCallWithBaseSyncPrimitives`（Chrome 同步 IO / 同步等待埋点）——按线程、进程、频次、累计阻塞时间排序。实测 session 中 Worker / I/O 线程上出现 15K+ 次，是 file-mapping 和字体加载卡顿的直接来源。

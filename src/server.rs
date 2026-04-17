@@ -90,24 +90,25 @@ pub struct ListThreadsInProcessParams {
     pub process_name: String,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
-pub struct ChromeTraceParams {
-    /// Absolute path to the trace file (must be a Chrome trace).
-    pub trace_path: String,
-}
-
 /// Server-level `instructions` shipped on MCP handshake. Lists curated
 /// PerfettoSQL stdlib modules so agents stop hand-rolling `LIKE '%x%'` scans
 /// on the raw `slice` table. Module names and their exposed public
 /// tables/views are taken from the vendored Perfetto stdlib source.
+///
+/// The same stdlib guidance is also carried on the `execute_sql` tool
+/// description (the `tools/list` channel v0.3/0.4 samples confirmed reaches
+/// Claude Code agents). This multi-channel redundancy is by design:
+/// instructions token cost is paid once at handshake, so future agent
+/// frameworks or MCP clients that do route `instructions` into the system
+/// prompt get the nudge for free.
 pub const STDLIB_INSTRUCTIONS: &str = "Perfetto trace analysis server. \
     Start by calling load_trace with a path to a .perfetto-trace or .pftrace file, \
     then use list_tables and list_table_structure to discover the schema, and \
     execute_sql to query.\n\
     \n\
     PREFER PerfettoSQL stdlib over raw `slice` + `LIKE '%x%'` scans. Call \
-    `INCLUDE PERFETTO MODULE <name>` in a separate execute_sql call, then query \
-    the exposed table/view:\n\
+    `INCLUDE PERFETTO MODULE <name>` then query the exposed table/view \
+    (INCLUDE and SELECT can be in a single execute_sql call):\n\
     \n\
     Chrome traces:\n\
     - chrome.page_loads -> chrome_page_loads (navigations, FCP, LCP, DCL)\n\
@@ -129,58 +130,6 @@ pub const STDLIB_INSTRUCTIONS: &str = "Perfetto trace analysis server. \
     For modules not listed here (memory.*, wattson.*, sched.*, android.frames.*, \
     etc.), fetch https://perfetto.dev/docs/analysis/stdlib-docs before falling \
     back to raw slice scans.";
-
-/// SQL driving `chrome_scroll_jank_summary`. Exposed so integration tests
-/// can exercise the exact statement the tool ships, preventing silent drift.
-pub const CHROME_SCROLL_JANK_SUMMARY_SQL: &str =
-    "INCLUDE PERFETTO MODULE chrome.scroll_jank.scroll_jank_v3; \
-     SELECT cause_of_jank, COUNT(*) AS jank_count \
-     FROM chrome_janky_frames \
-     GROUP BY cause_of_jank \
-     ORDER BY jank_count DESC";
-
-/// SQL driving `chrome_page_load_summary`. Exposed so integration tests
-/// can exercise the exact statement the tool ships, preventing silent drift.
-pub const CHROME_PAGE_LOAD_SUMMARY_SQL: &str = "INCLUDE PERFETTO MODULE chrome.page_loads; \
-     SELECT \
-       url, \
-       navigation_start_ts, \
-       fcp / 1e6 AS fcp_ms, \
-       lcp / 1e6 AS lcp_ms, \
-       CASE WHEN dom_content_loaded_event_ts IS NOT NULL \
-            THEN (dom_content_loaded_event_ts - navigation_start_ts) / 1e6 \
-       END AS dcl_ms, \
-       CASE WHEN load_event_ts IS NOT NULL \
-            THEN (load_event_ts - navigation_start_ts) / 1e6 \
-       END AS load_ms \
-     FROM chrome_page_loads \
-     ORDER BY navigation_start_ts ASC";
-
-/// SQL driving `chrome_main_thread_hotspots`. Exposed so integration tests
-/// can exercise the exact statement the tool ships, preventing silent drift.
-pub const CHROME_MAIN_THREAD_HOTSPOTS_SQL: &str = "INCLUDE PERFETTO MODULE chrome.tasks; \
-     SELECT \
-       full_name AS task_name, \
-       thread_name, \
-       process_name, \
-       dur / 1e6 AS dur_ms, \
-       ts \
-     FROM chrome_tasks \
-     WHERE dur > 0 \
-     ORDER BY dur DESC \
-     LIMIT 50";
-
-/// SQL driving `chrome_startup_summary`. Exposed so integration tests
-/// can exercise the exact statement the tool ships, preventing silent drift.
-pub const CHROME_STARTUP_SUMMARY_SQL: &str = "INCLUDE PERFETTO MODULE chrome.startups; \
-     SELECT \
-       name, \
-       launch_cause, \
-       (first_visible_content_ts - startup_begin_ts) / 1e6 AS startup_duration_ms, \
-       startup_begin_ts, \
-       first_visible_content_ts \
-     FROM chrome_startups \
-     ORDER BY startup_begin_ts ASC";
 
 // -- Tool implementations --------------------------------------------------
 
@@ -216,21 +165,29 @@ impl PerfettoMcpServer {
     #[tool(
         name = "execute_sql",
         description = "Execute a PerfettoSQL query against a loaded trace. Returns a JSON \
-                       array of row objects.\n\
-                       \n\
-                       IMPORTANT: Results are capped at 5000 rows — queries exceeding this \
-                       limit will fail. Results should be aggregates rather than raw row \
-                       data. Prefer PerfettoSQL stdlib modules (see server instructions) \
-                       over hand-rolling `LIKE '%x%'` scans on `slice`.\n\
-                       \n\
-                       `INCLUDE PERFETTO MODULE` must be done in a separate `execute_sql` \
-                       call, or it messes up the SQL results.\n\
+                       array of row objects. Results are capped at 5000 rows and \
+                       aggregates are strongly preferred over raw row data.\n\
                        \n\
                        The trace_path must reference a previously loaded trace.\n\
                        \n\
-                       Docs:\n\
-                       - Stdlib modules: https://perfetto.dev/docs/analysis/stdlib-docs\n\
-                       - PerfettoSQL syntax: https://perfetto.dev/docs/analysis/perfetto-sql-syntax"
+                       The PerfettoSQL stdlib is documented at \
+                       https://perfetto.dev/docs/analysis/stdlib-docs — auto-generated \
+                       from the stdlib SQL sources across 24 packages (chrome, android, \
+                       sched, slices, linux, wattson, v8, ...), worth fetching fully \
+                       (or per-package via anchors like #package-chrome, \
+                       #package-android) to learn exact view columns and function \
+                       signatures before composing queries. Stdlib modules already \
+                       encode the correct JOIN shape for most common analyses, so \
+                       reach for them before hand-rolling scans on `slice`.\n\
+                       \n\
+                       PerfettoSQL syntax: https://perfetto.dev/docs/analysis/perfetto-sql-syntax\n\
+                       \n\
+                       Subtopic references:\n\
+                       - Jank and frame timing: https://perfetto.dev/docs/data-sources/frametimeline\n\
+                       - CPU scheduling: https://perfetto.dev/docs/data-sources/cpu-scheduling\n\
+                       - Memory counters: https://perfetto.dev/docs/data-sources/memory-counters\n\
+                       - Battery counters: https://perfetto.dev/docs/data-sources/battery-counters\n\
+                       - Android logs: https://perfetto.dev/docs/data-sources/android-log"
     )]
     async fn execute_sql(
         &self,
@@ -387,101 +344,6 @@ impl PerfettoMcpServer {
         }
         serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
     }
-
-    #[tool(
-        name = "chrome_scroll_jank_summary",
-        description = "Summarize scroll jank causes in a Chrome trace, grouped by \
-                       cause_of_jank and sorted by frequency. Uses the stdlib \
-                       `chrome.scroll_jank.scroll_jank_v3` module. Chrome traces only — \
-                       returns an error on traces without Chrome scroll data."
-    )]
-    async fn chrome_scroll_jank_summary(
-        &self,
-        Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
-        let rows = client
-            .query(CHROME_SCROLL_JANK_SUMMARY_SQL)
-            .await
-            .map_err(|e| format_chrome_tool_error("Chrome scroll jank summary", e))?;
-        if rows.is_empty() {
-            return Ok(
-                "No scroll jank found in this trace (no scroll activity captured \
-                       or no janky frames detected)."
-                    .to_owned(),
-            );
-        }
-        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
-    }
-
-    #[tool(
-        name = "chrome_page_load_summary",
-        description = "Summarize page loads in a Chrome trace: URL plus FCP / LCP / \
-                       DCL / load times in milliseconds, one row per navigation. \
-                       Uses the stdlib `chrome.page_loads` module. Chrome traces \
-                       only — returns an error on traces without page-load data."
-    )]
-    async fn chrome_page_load_summary(
-        &self,
-        Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
-        let rows = client
-            .query(CHROME_PAGE_LOAD_SUMMARY_SQL)
-            .await
-            .map_err(|e| format_chrome_tool_error("Chrome page load summary", e))?;
-        if rows.is_empty() {
-            return Ok(
-                "No page loads found in this trace (no Chrome navigations captured).".to_owned(),
-            );
-        }
-        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
-    }
-
-    #[tool(
-        name = "chrome_main_thread_hotspots",
-        description = "Top 50 longest Chrome renderer/browser main-thread tasks by \
-                       duration, with task name, thread, process, and duration in \
-                       milliseconds. Uses the stdlib `chrome.tasks` module. Chrome \
-                       traces only — returns an error on traces without Chrome task \
-                       data."
-    )]
-    async fn chrome_main_thread_hotspots(
-        &self,
-        Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
-        let rows = client
-            .query(CHROME_MAIN_THREAD_HOTSPOTS_SQL)
-            .await
-            .map_err(|e| format_chrome_tool_error("Chrome main-thread hotspots", e))?;
-        if rows.is_empty() {
-            return Ok("No Chrome main-thread tasks found in this trace.".to_owned());
-        }
-        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
-    }
-
-    #[tool(
-        name = "chrome_startup_summary",
-        description = "Summarize Chrome browser startup events: startup name, launch \
-                       cause, and time to first visible content in milliseconds. Uses \
-                       the stdlib `chrome.startups` module. Chrome traces only — \
-                       returns an error on traces without Chrome startup data."
-    )]
-    async fn chrome_startup_summary(
-        &self,
-        Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
-        let rows = client
-            .query(CHROME_STARTUP_SUMMARY_SQL)
-            .await
-            .map_err(|e| format_chrome_tool_error("Chrome startup summary", e))?;
-        if rows.is_empty() {
-            return Ok("No Chrome startup events found in this trace.".to_owned());
-        }
-        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
-    }
 }
 
 impl PerfettoMcpServer {
@@ -531,26 +393,6 @@ fn format_execute_sql_error(err: PerfettoError) -> String {
              rather than raw row data. Reuse stdlib views where possible."
         ),
         other => format!("Query failed: {other}"),
-    }
-}
-
-/// "Wrong trace type" hint is gated on `MissingTable | MissingModule` so an
-/// unrelated SQL bug isn't hidden behind a misleading "use a Chrome trace"
-/// suggestion.
-fn format_chrome_tool_error(tool_label: &str, err: PerfettoError) -> String {
-    match err {
-        PerfettoError::QueryError {
-            kind: QueryErrorKind::MissingTable | QueryErrorKind::MissingModule,
-            message,
-        } => format!(
-            "Failed to run {tool_label}: {message}\n\nHint: this tool \
-             requires a Chrome trace. For non-Chrome traces, use execute_sql \
-             with a different query."
-        ),
-        PerfettoError::QueryError { message, .. } => {
-            format!("Failed to run {tool_label}: {message}")
-        }
-        other => format!("Failed: {other}"),
     }
 }
 
@@ -763,59 +605,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn chrome_scroll_jank_hint_fires_on_missing_table() {
-        let formatted = format_chrome_tool_error(
-            "Chrome scroll jank summary",
-            PerfettoError::QueryError {
-                kind: QueryErrorKind::MissingTable,
-                message: "no such table: chrome_janky_frames".to_owned(),
-            },
-        );
-        assert!(
-            formatted.contains("Chrome trace"),
-            "missing-table errors must surface the Chrome-trace hint, got: {formatted}",
-        );
-        assert!(
-            formatted.contains("execute_sql"),
-            "hint must point at execute_sql for non-Chrome traces, got: {formatted}",
-        );
-    }
-
-    #[test]
-    fn chrome_scroll_jank_hint_fires_on_missing_module() {
-        let formatted = format_chrome_tool_error(
-            "Chrome scroll jank summary",
-            PerfettoError::QueryError {
-                kind: QueryErrorKind::MissingModule,
-                message: "Module not found: chrome.scroll_jank.scroll_jank_v3".to_owned(),
-            },
-        );
-        assert!(
-            formatted.contains("Chrome trace"),
-            "missing-module errors must surface the Chrome-trace hint, got: {formatted}",
-        );
-    }
-
-    #[test]
-    fn chrome_scroll_jank_skips_unrelated_query_errors() {
-        let formatted = format_chrome_tool_error(
-            "Chrome scroll jank summary",
-            PerfettoError::QueryError {
-                kind: QueryErrorKind::Other,
-                message: "syntax error near GROUP".to_owned(),
-            },
-        );
-        assert!(
-            !formatted.contains("Chrome trace"),
-            "unrelated SQL errors must not get the Chrome-trace hint, got: {formatted}",
-        );
-        assert!(
-            formatted.contains("syntax error"),
-            "unrelated errors must still surface the original message, got: {formatted}",
-        );
-    }
-
     fn test_server() -> PerfettoMcpServer {
         let manager = Arc::new(TraceProcessorManager::new_with_binary(
             PathBuf::from("/nonexistent/trace_processor_shell"),
@@ -875,10 +664,6 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "chrome_main_thread_hotspots",
-                "chrome_page_load_summary",
-                "chrome_scroll_jank_summary",
-                "chrome_startup_summary",
                 "execute_sql",
                 "list_processes",
                 "list_table_structure",
