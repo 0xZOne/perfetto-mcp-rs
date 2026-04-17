@@ -2,6 +2,11 @@
 
 ## perfetto-mcp-rs 0.x Changes
 
+### [0.4.0](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.4.0) (April 17, 2026)
+
+- Server `instructions` now ship a curated PerfettoSQL stdlib directory — 10 modules covering Chrome (`chrome.page_loads`, `chrome.scroll_jank.scroll_jank_v3`, `chrome.tasks`, `chrome.startups`, `chrome.web_content_interactions`), Android (`android.startup.startups`, `android.anrs`, `android.binder`), and generic (`slices.with_context`, `linux.cpu.frequency`), each mapped to its public table/view name. Two post-v0.3.0 transcripts confirmed the soft doc-URL nudge from `bea850c` was insufficient: even on Chrome cold-start + FCP analyses where `chrome.page_loads` / `chrome.startups` directly apply, agents still fell back to raw `slice` + `LIKE '%x%'` scans and manual `thread_track → thread → process` JOIN chains. Pushing the directory into handshake instructions costs one-shot token spend per session but removes the WebFetch step agents never took. Module and view names are pinned against the vendored Perfetto stdlib source so drift surfaces as a test failure, not silent wrong-advice.
+- `execute_sql` tool description slimmed: the eight-line data-source doc-URL list collapses to `stdlib-docs` + `perfetto-sql-syntax` only (the rest are reachable from `stdlib-docs`), and the stdlib nudge now points at "server instructions" for the curated list instead of repeating it. Keeps the single-signal shape — one direction per surface.
+
 ### [0.3.0](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.3.0) (April 16, 2026)
 
 - [a0efea7](https://github.com/0xZOne/perfetto-mcp-rs/commit/a0efea7) **Breaking**: rename tool `table_structure` → `list_table_structure` so utility tools consistently use the `list_{noun}` shape (alongside `list_tables`, `list_processes`, `list_threads_in_process`), matching the `verb_noun` convention borrowed from `com.google.PerfettoMcp`. Clients pinned to the old name must update.

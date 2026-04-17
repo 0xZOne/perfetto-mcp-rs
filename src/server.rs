@@ -36,13 +36,7 @@ impl ServerHandler for PerfettoMcpServer {
                 website_url: None,
             },
             capabilities: ServerCapabilities::builder().enable_tools().build(),
-            instructions: Some(
-                "Perfetto trace analysis server. Start by calling load_trace \
-                 with a path to a .perfetto-trace or .pftrace file, then use \
-                 list_tables and list_table_structure to discover the schema, and \
-                 execute_sql to query the trace data."
-                    .into(),
-            ),
+            instructions: Some(STDLIB_INSTRUCTIONS.into()),
             ..Default::default()
         }
     }
@@ -102,6 +96,40 @@ pub struct ChromeScrollJankParams {
     pub trace_path: String,
 }
 
+/// Server-level `instructions` shipped on MCP handshake. Lists curated
+/// PerfettoSQL stdlib modules so agents stop hand-rolling `LIKE '%x%'` scans
+/// on the raw `slice` table. Module names and their exposed public
+/// tables/views are taken from the vendored Perfetto stdlib source.
+pub const STDLIB_INSTRUCTIONS: &str = "Perfetto trace analysis server. \
+    Start by calling load_trace with a path to a .perfetto-trace or .pftrace file, \
+    then use list_tables and list_table_structure to discover the schema, and \
+    execute_sql to query.\n\
+    \n\
+    PREFER PerfettoSQL stdlib over raw `slice` + `LIKE '%x%'` scans. Call \
+    `INCLUDE PERFETTO MODULE <name>` in a separate execute_sql call, then query \
+    the exposed table/view:\n\
+    \n\
+    Chrome traces:\n\
+    - chrome.page_loads -> chrome_page_loads (navigations, FCP, LCP, DCL)\n\
+    - chrome.scroll_jank.scroll_jank_v3 -> chrome_janky_frames (scroll jank causes)\n\
+    - chrome.tasks -> chrome_tasks (renderer/browser main-thread tasks)\n\
+    - chrome.startups -> chrome_startups (browser process startup)\n\
+    - chrome.web_content_interactions -> chrome_web_content_interactions (input latency, INP)\n\
+    \n\
+    Android traces:\n\
+    - android.startup.startups -> android_startups (app cold/warm start)\n\
+    - android.anrs -> android_anrs (ANR detection)\n\
+    - android.binder -> android_binder_txns (binder IPC)\n\
+    \n\
+    Generic (any trace):\n\
+    - slices.with_context -> thread_slice, process_slice (use INSTEAD OF manual \
+      thread_track -> thread -> process JOIN chain)\n\
+    - linux.cpu.frequency -> cpu_frequency_counters (CPU frequency)\n\
+    \n\
+    For modules not listed here (memory.*, wattson.*, sched.*, android.frames.*, \
+    etc.), fetch https://perfetto.dev/docs/analysis/stdlib-docs before falling \
+    back to raw slice scans.";
+
 /// SQL driving `chrome_scroll_jank_summary`. Exposed so integration tests
 /// can exercise the exact statement the tool ships, preventing silent drift.
 pub const CHROME_SCROLL_JANK_SUMMARY_SQL: &str =
@@ -149,21 +177,17 @@ impl PerfettoMcpServer {
                        \n\
                        IMPORTANT: Results are capped at 5000 rows — queries exceeding this \
                        limit will fail. Results should be aggregates rather than raw row \
-                       data, and reuse stdlib views where possible.\n\
+                       data. Prefer PerfettoSQL stdlib modules (see server instructions) \
+                       over hand-rolling `LIKE '%x%'` scans on `slice`.\n\
                        \n\
                        `INCLUDE PERFETTO MODULE` must be done in a separate `execute_sql` \
                        call, or it messes up the SQL results.\n\
                        \n\
                        The trace_path must reference a previously loaded trace.\n\
                        \n\
-                       Documentation:\n\
-                       - Stdlib index: https://perfetto.dev/docs/analysis/stdlib-docs\n\
-                       - PerfettoSQL syntax: https://perfetto.dev/docs/analysis/perfetto-sql-syntax\n\
-                       - Frame timeline (jank): https://perfetto.dev/docs/data-sources/frametimeline\n\
-                       - CPU scheduling: https://perfetto.dev/docs/data-sources/cpu-scheduling\n\
-                       - Memory counters: https://perfetto.dev/docs/data-sources/memory-counters\n\
-                       - Battery counters (power): https://perfetto.dev/docs/data-sources/battery-counters\n\
-                       - Android logs: https://perfetto.dev/docs/data-sources/android-log"
+                       Docs:\n\
+                       - Stdlib modules: https://perfetto.dev/docs/analysis/stdlib-docs\n\
+                       - PerfettoSQL syntax: https://perfetto.dev/docs/analysis/perfetto-sql-syntax"
     )]
     async fn execute_sql(
         &self,
@@ -687,6 +711,33 @@ mod tests {
         assert!(
             info.capabilities.tools.is_some(),
             "server must declare `tools` capability so clients call tools/list"
+        );
+    }
+
+    #[test]
+    fn instructions_list_core_stdlib_modules() {
+        let info = test_server().get_info();
+        let instructions = info
+            .instructions
+            .expect("server must ship instructions with stdlib module directory");
+        for module in [
+            "chrome.page_loads",
+            "chrome.scroll_jank.scroll_jank_v3",
+            "chrome.tasks",
+            "chrome.startups",
+            "android.startup.startups",
+            "android.anrs",
+            "android.binder",
+            "slices.with_context",
+        ] {
+            assert!(
+                instructions.contains(module),
+                "instructions missing stdlib module `{module}` — agents will fall back to raw slice scans"
+            );
+        }
+        assert!(
+            instructions.contains("INCLUDE PERFETTO MODULE"),
+            "instructions must tell agents to INCLUDE stdlib modules before querying"
         );
     }
 
