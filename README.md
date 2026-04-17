@@ -14,11 +14,13 @@ PerfettoSQL.
 Backed by `trace_processor_shell` — downloaded automatically on first run, no
 manual Perfetto install required.
 
-Works best with agentic MCP clients (Claude Code, Claude Desktop, Cursor)
+Works best with agentic MCP clients (Claude Code, Codex, Claude Desktop, Cursor)
 that can chain multi-turn tool calls. Non-agentic clients will see the same
 tools but won't be able to follow the error-message nudges that steer the
 LLM through the typical `load_trace` → `list_tables` → `list_table_structure` →
 `execute_sql` flow.
+
+> Navigate agents toward the right PerfettoSQL stdlib modules — the analysis SQL is always the agent's own.
 
 ## Quick install
 
@@ -36,8 +38,8 @@ irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.ps1 | 
 
 Both installers drop the prebuilt binary into `~/.local/bin` (or
 `%USERPROFILE%\.local\bin` on Windows), add it to your user PATH if needed,
-and — if Claude Code is installed — register it as a user-scope MCP server.
-Restart Claude Code to pick it up.
+and — if Claude Code and/or Codex are installed — register it automatically.
+Restart Claude Code or start a new Codex session to pick it up.
 
 Supported platforms: linux amd64/arm64, macOS amd64/arm64, Windows amd64.
 If you'd rather not run a script, grab the binary directly from the
@@ -45,25 +47,25 @@ If you'd rather not run a script, grab the binary directly from the
 
 ## Uninstall
 
-One-liner per platform. Unregisters the MCP server from Claude Code,
+One-liner per platform. Unregisters the MCP server from Claude Code and Codex,
 removes the binary, and deletes the cached `trace_processor_shell`.
 
 **Linux:**
 
 ```sh
-claude mcp remove perfetto-mcp-rs --scope user 2>/dev/null; rm -f ~/.local/bin/perfetto-mcp-rs; rm -rf ~/.local/share/perfetto-mcp-rs
+if command -v claude >/dev/null 2>&1; then claude mcp remove perfetto-mcp-rs --scope user 2>/dev/null; fi; if command -v codex >/dev/null 2>&1; then codex mcp remove perfetto-mcp-rs 2>/dev/null; fi; rm -f ~/.local/bin/perfetto-mcp-rs; rm -rf ~/.local/share/perfetto-mcp-rs
 ```
 
 **macOS:**
 
 ```sh
-claude mcp remove perfetto-mcp-rs --scope user 2>/dev/null; rm -f ~/.local/bin/perfetto-mcp-rs; rm -rf "$HOME/Library/Application Support/perfetto-mcp-rs"
+if command -v claude >/dev/null 2>&1; then claude mcp remove perfetto-mcp-rs --scope user 2>/dev/null; fi; if command -v codex >/dev/null 2>&1; then codex mcp remove perfetto-mcp-rs 2>/dev/null; fi; rm -f ~/.local/bin/perfetto-mcp-rs; rm -rf "$HOME/Library/Application Support/perfetto-mcp-rs"
 ```
 
-**Windows (PowerShell) — close Claude Code first so the .exe isn't locked:**
+**Windows (PowerShell) — close Claude Code, Codex, or anything else using the .exe first:**
 
 ```powershell
-if (Get-Command claude -ErrorAction SilentlyContinue) { claude mcp remove perfetto-mcp-rs --scope user 2>$null }; Remove-Item -Force "$HOME\.local\bin\perfetto-mcp-rs.exe*" -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force "$env:LOCALAPPDATA\perfetto-mcp-rs" -ErrorAction SilentlyContinue
+if (Get-Command claude -ErrorAction SilentlyContinue) { claude mcp remove perfetto-mcp-rs --scope user 2>$null }; if (Get-Command codex -ErrorAction SilentlyContinue) { codex mcp remove perfetto-mcp-rs 2>$null }; Remove-Item -Force "$HOME\.local\bin\perfetto-mcp-rs.exe*" -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force "$env:LOCALAPPDATA\perfetto-mcp-rs" -ErrorAction SilentlyContinue
 ```
 
 ## Tools
@@ -85,7 +87,7 @@ the same trace.
 
 ## Example
 
-Ask Claude Code something like:
+Ask Claude Code or Codex something like:
 
 > Load `~/traces/scroll_jank.pftrace` and tell me the top scroll jank causes.
 
@@ -101,8 +103,15 @@ ORDER BY n DESC;
 
 ## Manual MCP client configuration
 
-If the installer's auto-registration doesn't apply to your client, add this
-to your MCP server config (e.g. `~/.claude.json` or `.mcp.json`):
+If the installer's auto-registration doesn't apply to your client:
+
+**Codex:**
+
+```sh
+codex mcp add perfetto-mcp-rs -- /absolute/path/to/perfetto-mcp-rs
+```
+
+**JSON-based clients (e.g. Claude Code, Claude Desktop, Cursor):**
 
 ```json
 {

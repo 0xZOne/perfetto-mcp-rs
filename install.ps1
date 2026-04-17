@@ -1,4 +1,4 @@
-# Install perfetto-mcp-rs and register it with Claude Code.
+# Install perfetto-mcp-rs and register it with Claude Code / Codex.
 #
 # Usage:
 #   irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.ps1 | iex
@@ -65,7 +65,7 @@ function Install-PerfettoMcp {
         try {
             Move-Item -LiteralPath $dest -Destination $aside -Force -ErrorAction Stop
         } catch {
-            _fail "cannot replace $dest - is Claude Code running with it? Close Claude Code and retry."
+            _fail "cannot replace $dest - is an MCP client still running it? Close Claude Code, Codex, or any other client using it and retry."
         }
     }
 
@@ -80,7 +80,7 @@ function Install-PerfettoMcp {
     # [Environment]::SetEnvironmentVariable, but the registry provider
     # cmdlets work. Side effect: we don't broadcast WM_SETTINGCHANGE, so
     # only newly launched terminals see the update — acceptable because
-    # `claude mcp add` registers the absolute path anyway.
+    # MCP registrations store the absolute path anyway.
     $current = (Get-ItemProperty -Path 'HKCU:\Environment' -Name PATH -ErrorAction SilentlyContinue).PATH
     if ($null -eq $current) { $current = '' }
     $parts = $current -split ';' | Where-Object { $_ -ne '' }
@@ -97,36 +97,58 @@ function Install-PerfettoMcp {
     }
 
     # Forward-slash form avoids backslash-escaping hazards in JSON configs.
-    $claudePath = ($dest -replace '\\', '/')
+    $clientPath = ($dest -replace '\\', '/')
 
     if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
         Write-Host ""
         Write-Host "NOTE: 'claude' CLI not found. To use this server with Claude Code, install"
         Write-Host "Claude Code first, then run:"
         Write-Host ""
-        Write-Host "    claude mcp add perfetto-mcp-rs --scope user $claudePath"
+        Write-Host "    claude mcp add perfetto-mcp-rs --scope user $clientPath"
         Write-Host ""
-        return
+    } else {
+        # First-install `claude mcp remove` legitimately exits non-zero (nothing
+        # to remove). Under PS 7.4+ with $ErrorActionPreference='Stop', the
+        # $PSNativeCommandUseErrorActionPreference default promotes that non-zero
+        # exit to a terminating error and kills the script before `add` runs.
+        # Relax EAP for the native calls and merge their stderr into stdout so
+        # any complaint is fully swallowed.
+        $savedEAP = $ErrorActionPreference
+        $ErrorActionPreference = 'SilentlyContinue'
+        try { & claude mcp remove perfetto-mcp-rs --scope user 2>&1 | Out-Null } catch {}
+        try { & claude mcp add perfetto-mcp-rs --scope user $clientPath 2>&1 | Out-Null } catch {}
+        $claudeAddExit = $LASTEXITCODE
+        $ErrorActionPreference = $savedEAP
+
+        if ($claudeAddExit -eq 0) {
+            _info "registered with Claude Code (user scope). Restart Claude Code to pick it up."
+        } else {
+            _warn "failed to register with Claude Code. Run manually:"
+            Write-Host "    claude mcp add perfetto-mcp-rs --scope user $clientPath"
+        }
     }
 
-    # First-install `claude mcp remove` legitimately exits non-zero (nothing
-    # to remove). Under PS 7.4+ with $ErrorActionPreference='Stop', the
-    # $PSNativeCommandUseErrorActionPreference default promotes that non-zero
-    # exit to a terminating error and kills the script before `add` runs.
-    # Relax EAP for the native calls and merge their stderr into stdout so
-    # any complaint is fully swallowed.
-    $savedEAP = $ErrorActionPreference
-    $ErrorActionPreference = 'SilentlyContinue'
-    try { & claude mcp remove perfetto-mcp-rs --scope user 2>&1 | Out-Null } catch {}
-    try { & claude mcp add perfetto-mcp-rs --scope user $claudePath 2>&1 | Out-Null } catch {}
-    $addExit = $LASTEXITCODE
-    $ErrorActionPreference = $savedEAP
-
-    if ($addExit -eq 0) {
-        _info "registered with Claude Code (user scope). Restart Claude Code to pick it up."
+    if (-not (Get-Command codex -ErrorAction SilentlyContinue)) {
+        Write-Host ""
+        Write-Host "NOTE: 'codex' CLI not found. To use this server with Codex, install"
+        Write-Host "Codex first, then run:"
+        Write-Host ""
+        Write-Host "    codex mcp add perfetto-mcp-rs -- $clientPath"
+        Write-Host ""
     } else {
-        _warn "failed to register with Claude Code. Run manually:"
-        Write-Host "    claude mcp add perfetto-mcp-rs --scope user $claudePath"
+        $savedEAP = $ErrorActionPreference
+        $ErrorActionPreference = 'SilentlyContinue'
+        try { & codex mcp remove perfetto-mcp-rs 2>&1 | Out-Null } catch {}
+        try { & codex mcp add perfetto-mcp-rs -- $clientPath 2>&1 | Out-Null } catch {}
+        $codexAddExit = $LASTEXITCODE
+        $ErrorActionPreference = $savedEAP
+
+        if ($codexAddExit -eq 0) {
+            _info "registered with Codex. New Codex sessions will pick it up."
+        } else {
+            _warn "failed to register with Codex. Run manually:"
+            Write-Host "    codex mcp add perfetto-mcp-rs -- $clientPath"
+        }
     }
 }
 

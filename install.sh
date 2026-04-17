@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Install perfetto-mcp-rs and register it with Claude Code.
+# Install perfetto-mcp-rs and register it with Claude Code / Codex.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh
@@ -59,8 +59,8 @@ resolve_version() {
 add_to_user_path_windows() {
   # Append INSTALL_DIR to the user-level Windows PATH via PowerShell. The
   # .NET SetEnvironmentVariable call writes to HKCU\Environment and
-  # broadcasts WM_SETTINGCHANGE, so new processes (including the next
-  # Claude Code launch) see the update without a reboot.
+  # broadcasts WM_SETTINGCHANGE, so new processes see the update without a
+  # reboot.
   dir_msys="$1"
   dir_win="$(cygpath -m "$dir_msys")"
   if ! command -v powershell.exe >/dev/null 2>&1; then
@@ -79,7 +79,7 @@ add_to_user_path_windows() {
   ' 2>/dev/null | tr -d '\r')"
   case "$result" in
     already) info "${dir_win} is already on your Windows user PATH" ;;
-    added)   info "Added ${dir_win} to your Windows user PATH (new terminals and apps will see it; restart Claude Code)" ;;
+    added)   info "Added ${dir_win} to your Windows user PATH (new terminals and apps will see it)" ;;
     *)       warn "Failed to update Windows PATH; add ${dir_win} manually via System Properties → Environment Variables" ;;
   esac
 }
@@ -110,6 +110,34 @@ EOF
   else
     warn "Failed to register with Claude Code. Run manually:"
     printf '    claude mcp add perfetto-mcp-rs --scope user %s\n' "$bin_path"
+  fi
+}
+
+register_with_codex() {
+  bin_path="$1"
+  # codex.exe on Windows also wants a Windows-form path, not /c/Users/...
+  # from MSYS.
+  if command -v cygpath >/dev/null 2>&1; then
+    bin_path="$(cygpath -m "$bin_path")"
+  fi
+  if ! command -v codex >/dev/null 2>&1; then
+    cat <<EOF
+
+NOTE: 'codex' CLI not found. To use this server with Codex, install
+Codex first, then run:
+
+    codex mcp add perfetto-mcp-rs -- ${bin_path}
+
+EOF
+    return
+  fi
+  # Idempotent: remove stale entry first, then add. Remove may fail harmlessly.
+  codex mcp remove perfetto-mcp-rs >/dev/null 2>&1 || true
+  if codex mcp add perfetto-mcp-rs -- "$bin_path" >/dev/null 2>&1; then
+    info "Registered with Codex. New Codex sessions will pick it up."
+  else
+    warn "Failed to register with Codex. Run manually:"
+    printf '    codex mcp add perfetto-mcp-rs -- %s\n' "$bin_path"
   fi
 }
 
@@ -144,15 +172,15 @@ main() {
   # On Windows a running .exe is locked against unlink+create, which is what
   # `install` does. MoveFile (mv) is allowed on locked files, so rename the
   # existing binary aside first and let the new one land at the canonical
-  # path. The aside is cleaned up on the next install, once the old claude
-  # subprocess has exited.
+  # path. The aside is cleaned up on the next install, once the old MCP
+  # client subprocess has exited.
   case "$platform" in
     windows-*)
       rm -f "${INSTALL_DIR}/${bin_file}".old-* 2>/dev/null || true
       if [ -e "${INSTALL_DIR}/${bin_file}" ]; then
         ts="$(date +%s)"
         mv "${INSTALL_DIR}/${bin_file}" "${INSTALL_DIR}/${bin_file}.old-${ts}" 2>/dev/null \
-          || err "cannot replace ${INSTALL_DIR}/${bin_file} (is Claude Code running? close it and retry)"
+          || err "cannot replace ${INSTALL_DIR}/${bin_file} (is an MCP client still running it? close it and retry)"
       fi
       ;;
   esac
@@ -181,6 +209,7 @@ EOF
   esac
 
   register_with_claude "${INSTALL_DIR}/${bin_file}"
+  register_with_codex "${INSTALL_DIR}/${bin_file}"
 }
 
 main "$@"
