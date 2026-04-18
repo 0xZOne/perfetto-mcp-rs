@@ -45,6 +45,19 @@ Code 和/或 Codex，也会顺手自动注册。Claude Code 重启后生效，Co
 不想跑脚本的话，直接去 [releases 页面](https://github.com/0xZOne/perfetto-mcp-rs/releases)
 下对应平台的二进制也行。
 
+## 升级
+
+直接重跑安装命令——会拉取最新 release，安全覆盖现有二进制（Windows 下
+带文件锁重试），并幂等地重新注册到 Claude Code / Codex。
+
+用 `VERSION` 环境变量指定特定版本：
+
+```sh
+VERSION=v0.7.0 curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh
+```
+
+无后台自动更新——升级由用户显式触发。
+
 ## 卸载
 
 每个平台一条，直接粘贴执行。从 Claude Code 和 Codex 注销、删二进制、清掉缓存的

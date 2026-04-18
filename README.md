@@ -45,6 +45,20 @@ Supported platforms: linux amd64/arm64, macOS amd64/arm64, Windows amd64.
 If you'd rather not run a script, grab the binary directly from the
 [releases page](https://github.com/0xZOne/perfetto-mcp-rs/releases).
 
+## Upgrade
+
+Re-run the same install command — it pulls the latest release, safely
+overwrites the existing binary (with Windows file-lock retry), and
+re-registers the MCP server with Claude Code / Codex idempotently.
+
+Pin to a specific version with the `VERSION` env var:
+
+```sh
+VERSION=v0.7.0 curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh
+```
+
+No auto-update daemon — upgrades are explicit.
+
 ## Uninstall
 
 One-liner per platform. Unregisters the MCP server from Claude Code and Codex,
