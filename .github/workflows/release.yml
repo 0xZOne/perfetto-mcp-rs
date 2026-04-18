@@ -44,25 +44,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install build deps
-        shell: bash
-        run: |
-          case "$RUNNER_OS" in
-            Linux)
-              sudo apt-get update
-              pkgs="protobuf-compiler"
-              if [[ "${{ matrix.target }}" == *musl* ]]; then
-                pkgs="$pkgs musl-tools"
-              fi
-              sudo apt-get install -y $pkgs
-              ;;
-            macOS)
-              brew install protobuf
-              ;;
-            Windows)
-              choco install protoc --no-progress
-              ;;
-          esac
+      - uses: arduino/setup-protoc@v3
+        with:
+          version: "28.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install musl-tools (musl targets only)
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - uses: dtolnay/rust-toolchain@stable
         with:
