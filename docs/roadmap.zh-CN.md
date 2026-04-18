@@ -128,42 +128,42 @@ v0.2 已落地正确性修复、回归测试、错误模型收敛和下载硬化
 
 ### Foundation
 
-- [ ] 新增 `list_stdlib_modules`
-  - 枚举可发现的 stdlib 模块，避免 agent 必须事先知道模块名；是后续 stdlib 依赖型 M5 工具的基础
-  - 验收：返回模块 key（可用时附短描述）；对任意 trace 都能工作
-  - Fixture：复用已有任意 fixture
+- [x] 落地 `list_stdlib_modules`（v0.7.0 已发布）
+  - 返回 10 个 stdlib 模块的 JSON 数组（chrome / android / generic），含模块名、views、description、示例 usage SQL
+  - 无参数，可在 load_trace 前调用，定位为辅助发现工具（覆盖专用 `chrome_*` 工具之外的场景）
 
 ### Chrome Tools
 
-> **延后 — 策略审查中。** 预置 Chrome 域工具模式在 v0.6 中撤回。v0.3/0.4 样本
-> 确认 `tools/list` 通道有行为激活力，模式选了正确的通道，但实现出来的工具是答案形
-> （固定 SQL、字段窄、预聚合 `GROUP BY`），会把 agent 阻挡在工具返回层面而失去自己
-> 写 SQL 做更深分析的机会。pivot 将 stdlib 引导集中到 `execute_sql` 工具描述
->（Google `com.google.PerfettoMcp` 单工具模式）。
+> **v0.7 状态：五个 Chrome 域工具已落地，形态为 row-preserving thin wrapper。**
+> v0.5 时尝试过预聚合的"答案形"工具；v0.6 因答案形批评撤回；v0.7 恢复工具
+> 但改为行级输出，agent 可在工具返回的行上继续做 group / filter / correlate。
+> 设计原则：
 >
-> **重开时必须走导航形，不能走答案形。** 导航形工具返回结构化 JSON（模块名、
-> 视图名、列 schema）让 agent 自行组合 SQL，而不是给出预构建的结果。相对现有
-> `list_tables` / `list_table_structure` 的新增价值必须同时满足：(1) 无需先
-> INCLUDE 即可发现 Chrome stdlib 视图，(2) 提供模块→视图分组 + stdlib source
-> 注释文本（语义摘要），(3) 仅暴露稳定的公开 API 子集。不满足 (1)+(2) 的工具
-> 实质是换壳的答案形。
+> 1. **精选展示，不是纯 SELECT \***：工具选定常用排序 + LIMIT + 派生列
+>    （ms 单位换算），有主张但不锁死分析。
+> 2. **保持行级，不预聚合**：工具 SQL 里没有 `GROUP BY`——聚合由 agent
+>    决定。
+> 3. **稳定公开 stdlib 子集**：只暴露经 vendored Perfetto stdlib 源码
+>    验证的 view。
 >
-> **重开标准（事前定义，可证伪）**：仅当 v0.6 观察数据显示 Chrome 相关任务
-> stdlib 使用率 < 50% 时才进入原型阶段。验收要求在 ≥ 10 个样本上同时满足
-> H1（工具调用率 ≥ 50%）、H2（SQL 正确率较 description-only 提升 ≥ 20pp）、
-> H3（总 token 消耗 ≤ description + 一次 WebFetch）。任一不满足则回退到
-> description-only。
+> v0.7.0 已发布（均需要 Chrome trace）：
+>
+> - [x] `chrome_scroll_jank_summary` — 行级 `chrome_janky_frames`
+>       （cause、sub_cause、delay_since_last_frame、event_latency_id、
+>       scroll_id、vsync_interval），按 delay 降序取 100
+> - [x] `chrome_page_load_summary` — 每个 navigation 的
+>       FCP / LCP / DCL / load（`chrome.page_loads`）
+> - [x] `chrome_main_thread_hotspots` — 主线程任务 > 16ms 含 cpu_pct，
+>       用 `thread.is_main_thread = 1`（caveat：线程 metadata 缺失时可能为空）
+> - [x] `chrome_startup_summary` — 启动事件与首次可见内容时间
+>       （`chrome.startups`）
+> - [x] `chrome_web_content_interactions` — 点击/触摸/键盘按耗时排序，
+>       用于 INP 分析
 
-- [ ] （重开时必须走导航形，见上）将 `chrome_frame_timeline_summary` 替换为
-  导航形等价工具，例如返回 frame-timeline stdlib 模块 + 视图 + 列 schema 的
-  `list_chrome_frame_views`（模块名须查外部 Chromium checkout
-  `~/chromium/src/third_party/perfetto/src/trace_processor/perfetto_sql/stdlib/chrome/`
-  确认，本仓库无此路径；`chrome.frame_times` 未经验证；已知相关表名包括
-  `expected_frame_timeline_slice` / `actual_frame_timeline_slice`）。原答案形
-  bullet 明确拒绝。
-  - 验收：导航工具返回结构化 JSON schema；H1/H2/H3 证伪条件全部满足。
-  - Fixture：`tests/fixtures/scroll_jank.pftrace` 已保留供 v0.6 Chrome stdlib
-    e2e 测试使用，重开 frame-timeline 工作可直接复用。
+- [ ] 新增 `chrome_frame_timeline_summary`
+  - 基于 stdlib 的 frame-timeline / jank 聚合——模块名须查外部 Chromium checkout `~/chromium/src/third_party/perfetto/src/trace_processor/perfetto_sql/stdlib/chrome/`（见 `docs/plans/m5-stdlib-quickref-resource.md:439`），`chrome.frame_times` 未经验证；已知相关表名包括 `expected_frame_timeline_slice` / `actual_frame_timeline_slice`
+  - 验收：按 v0.7 设计原则，行级 thin wrapper
+  - Fixture：复用 `tests/fixtures/scroll_jank.pftrace`
 
 - [ ] 新增 `chrome_blocking_calls_summary`
   - 汇总 `ScopedBlockingCallWithBaseSyncPrimitives`（Chrome 同步 IO / 同步等待埋点）——按线程、进程、频次、累计阻塞时间排序。实测 session 中 Worker / I/O 线程上出现 15K+ 次，是 file-mapping 和字体加载卡顿的直接来源。

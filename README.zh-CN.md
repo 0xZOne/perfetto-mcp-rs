@@ -78,12 +78,23 @@ if (Get-Command claude -ErrorAction SilentlyContinue) { claude mcp remove perfet
 | `execute_sql` | 跑 PerfettoSQL 查询，返回 JSON 行（最多 5000 条） |
 | `list_processes` | 列出 trace 里的进程（pid、名字、起止时间戳） |
 | `list_threads_in_process` | 列出某个进程名下的线程（最多 2000 条） |
+| `chrome_scroll_jank_summary` | 按原因汇总 Chrome 滚动卡顿，行级明细（需要 Chrome trace） |
+| `chrome_page_load_summary` | 页面加载的 URL / FCP / LCP / DCL / load 耗时（需要 Chrome trace） |
+| `chrome_main_thread_hotspots` | 主线程任务按耗时排序，用 is_main_thread 识别（需要 Chrome trace） |
+| `chrome_startup_summary` | 浏览器启动事件与首次可见内容时间（需要 Chrome trace） |
+| `chrome_web_content_interactions` | Web 内容交互（点击、触摸、INP）按耗时排序（需要 Chrome trace） |
+| `list_stdlib_modules` | 列出 PerfettoSQL stdlib 模块及用法示例（无需先加载 trace） |
 
-一般流程：先 `load_trace`，再用 `list_tables` 看看都有哪些表，对感兴趣
-的表用 `list_table_structure` 查 schema，最后 `execute_sql` 查数据。分析
-Chrome 或 Android trace 时，先 `INCLUDE PERFETTO MODULE chrome.xxx` /
-`android.xxx` 加载对应模块——加载过的模块在后续查询里会一直保留，不用
-每次重复写。
+一般流程按 trace 类型分：
+
+- **Chrome trace**：`load_trace` → 直接用专用的 `chrome_*` 工具
+  （`chrome_scroll_jank_summary`、`chrome_page_load_summary`、
+  `chrome_main_thread_hotspots`、`chrome_startup_summary`、
+  `chrome_web_content_interactions`）→ 有需要时用 `execute_sql` 在工具返回
+  的行级数据上做进一步分析。
+- **其他 trace**：`load_trace` → 用 `list_tables` / `list_table_structure`
+  做 schema 探索 → `execute_sql` 查询。需要 stdlib 模块时可以调
+  `list_stdlib_modules` 做辅助（Android、`slices.with_context` 这类通用模块）。
 
 ## 示例
 

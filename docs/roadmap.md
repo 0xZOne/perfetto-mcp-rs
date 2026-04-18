@@ -128,71 +128,45 @@ Goal: upgrade from "generic SQL executor" to "analysis tool for common Perfetto 
 
 ### Foundation
 
-- [ ] Add `list_stdlib_modules`
-  - Enumerates discoverable stdlib modules so agents do not have to know module names in advance; foundation for every stdlib-dependent M5 tool
-  - Acceptance: returns module keys (and short descriptions where available); works against any trace
-  - Fixture: reuse any existing
+- [x] Add `list_stdlib_modules` (shipped v0.7.0)
+  - Returns curated JSON array of 10 stdlib modules (chrome / android / generic) with module name, views, description, illustrative usage query
+  - Takes no parameters — callable before load_trace, positioned as auxiliary discovery for analyses not covered by the dedicated `chrome_*` tools
 
 ### Chrome Tools
 
-> **Deferred — strategy under review.** The pre-built Chrome domain-tool
-> pattern was walked back in v0.6. v0.3/0.4 samples confirmed the
-> `tools/list` channel drives behavior, so the pattern picked the right
-> surface, but the resulting tools were answer-shaped (fixed SQL, narrow
-> columns, pre-aggregated `GROUP BY`) and risked steering agents — even
-> top-tier models — away from richer analyses they could do with their
-> own SQL against the stdlib. The pivot consolidates the stdlib nudge
-> into the `execute_sql` tool description (Google `com.google.PerfettoMcp`
-> single-tool pattern).
+> **v0.7 status: five Chrome domain tools shipped as row-preserving thin
+> wrappers over PerfettoSQL stdlib views.** v0.5 tried pre-aggregated
+> answer-shaped tools; v0.6 reverted on the "answer-shaped" critique; v0.7
+> restored the tools with row-level output so agents can group, filter,
+> and correlate further on the returned rows. Design principles:
 >
-> **If reopened, Chrome tooling must be navigation-shaped, not
-> answer-shaped.** The shape spectrum runs:
+> 1. **Curated display, not pure SELECT \***: tool picks a common sort +
+>    LIMIT + derived columns (ms unit conversion), opinionated but not
+>    analysis-locking.
+> 2. **Row-level, not pre-aggregated**: no `GROUP BY` in the tool SQL —
+>    agents decide aggregation.
+> 3. **Stable public stdlib subset**: only views verified against the
+>    vendored Perfetto stdlib source.
 >
-> - **Answer-shaped** (rejected): fixed SQL + pre-aggregated output.
->   Example of what NOT to ship: `chrome_scroll_jank_summary` returning
->   `COUNT(*) GROUP BY cause_of_jank` — the agent loses per-jank
->   timestamps / thread / process views and cannot follow up.
-> - **Navigation-shaped** (required form): returns discovery metadata
->   (module names, view names, column schemas) as structured JSON. The
->   agent then composes its own SQL against `execute_sql`. Example:
->   `list_chrome_views` returning
->   `{module: "chrome.scroll_jank.scroll_jank_v3",
->     views: [{name: "chrome_janky_frames",
->              columns: [{name: "cause_of_jank", type: "STRING"}, ...],
->              summary: "..."}]}`
->   (view name taken from the actual stdlib source; do not invent names).
-> - **Raw-material** (already shipped): `execute_sql` — the baseline.
+> Shipped in v0.7.0 (all Chrome-traces-only):
 >
-> **What a navigation tool must add over `list_tables` + `list_table_structure`:**
-> A navigation-shaped Chrome tool only justifies its weight if it delivers
-> information those two cannot produce with a comparable round-trip:
-> (1) pre-INCLUDE discoverability (`list_tables` only sees already-included
-> modules), (2) module-to-view grouping + semantic summaries from stdlib
-> source doc strings, (3) stable public-API subset (no internal `__`-prefixed
-> views). A tool satisfying fewer than (1)+(2) is an answer-shaped wrapper
-> in disguise.
->
-> **Reopen criteria (falsifiable, defined before sampling)**: only prototype
-> a navigation-shaped Chrome tool if v0.6 observation data shows stdlib usage
-> < 50% on Chrome-relevant tasks. Prototype acceptance requires H1 (invoked
-> ≥ 50% on relevant tasks), H2 (SQL correctness rises ≥ 20 pp over
-> description-only), and H3 (total token cost ≤ description + one WebFetch)
-> to all hold on ≥ 10 samples. Any one failing reverts to description-only.
+> - [x] `chrome_scroll_jank_summary` — row-level `chrome_janky_frames`
+>       (cause, sub_cause, delay_since_last_frame, event_latency_id,
+>       scroll_id, vsync_interval) sorted by delay DESC, limit 100
+> - [x] `chrome_page_load_summary` — FCP / LCP / DCL / load timing per
+>       navigation (`chrome.page_loads`)
+> - [x] `chrome_main_thread_hotspots` — main-thread tasks > 16ms with
+>       cpu_pct, uses `thread.is_main_thread = 1` (caveat: nullable for
+>       traces missing thread metadata)
+> - [x] `chrome_startup_summary` — startup events with time-to-first-visible
+>       (`chrome.startups`)
+> - [x] `chrome_web_content_interactions` — clicks / taps / keyboard ranked
+>       by duration for INP analysis
 
-- [ ] (If reopened, must be navigation-shaped per above) Replace
-  `chrome_frame_timeline_summary` with a navigation-shaped equivalent —
-  e.g. `list_chrome_frame_views` returning module + view + column schema
-  for the relevant frame-timeline stdlib module (look up the exact module
-  name from the vendored stdlib source in the external Chromium checkout
-  at `~/chromium/src/third_party/perfetto/src/trace_processor/perfetto_sql/stdlib/chrome/`
-  per `docs/plans/m5-stdlib-quickref-resource.md:439`; do NOT guess names;
-  `chrome.frame_times` is unverified; tables referenced include
-  `expected_frame_timeline_slice` / `actual_frame_timeline_slice`).
-  The original answer-shaped bullet is explicitly rejected.
-  - Acceptance: navigation tool returns structured JSON schema; H1/H2/H3
-    falsification conditions all hold on ≥ 10 samples.
-  - Fixture: `tests/fixtures/scroll_jank.pftrace` kept in-tree for the
-    v0.6 Chrome stdlib e2e test; reopened frame-timeline work can reuse it.
+- [ ] Add `chrome_frame_timeline_summary`
+  - Frame-timeline / jank aggregation using stdlib — look up the exact module name from the vendored stdlib source in the external Chromium checkout at `~/chromium/src/third_party/perfetto/src/trace_processor/perfetto_sql/stdlib/chrome/` per `docs/plans/m5-stdlib-quickref-resource.md:439`; do NOT guess names; `chrome.frame_times` is unverified; tables referenced include `expected_frame_timeline_slice` / `actual_frame_timeline_slice`
+  - Acceptance: row-preserving thin wrapper per v0.7 design principles
+  - Fixture: `tests/fixtures/scroll_jank.pftrace` (reuse)
 
 - [ ] Add `chrome_blocking_calls_summary`
   - Surfaces `ScopedBlockingCallWithBaseSyncPrimitives` slices (Chrome's sync-IO / sync-wait marker) ranked by thread, process, frequency, and total blocking time. Observed in live sessions on Worker / I/O threads with 15K+ occurrences driving file-mapping and font-load stalls.

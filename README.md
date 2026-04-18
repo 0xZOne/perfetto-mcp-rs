@@ -78,12 +78,24 @@ if (Get-Command claude -ErrorAction SilentlyContinue) { claude mcp remove perfet
 | `execute_sql` | Run a PerfettoSQL query, returns JSON rows (max 5000) |
 | `list_processes` | List processes in the trace (pid, name, start/end timestamps) |
 | `list_threads_in_process` | List threads under a process name (up to 2000) |
+| `chrome_scroll_jank_summary` | Worst janky frames with cause, sub-cause, delay_since_last_frame (Chrome trace) |
+| `chrome_page_load_summary` | Page loads: URL, FCP, LCP, DCL, load timings in ms (Chrome trace) |
+| `chrome_main_thread_hotspots` | Top main-thread tasks by duration with cpu_pct, uses is_main_thread (Chrome trace) |
+| `chrome_startup_summary` | Browser startup events and time-to-first-visible-content (Chrome trace) |
+| `chrome_web_content_interactions` | Web content interactions (clicks, taps, INP) ranked by duration (Chrome trace) |
+| `list_stdlib_modules` | List available PerfettoSQL stdlib modules with usage examples (no trace needed) |
 
-Typical flow: `load_trace` → `list_tables` to discover the schema →
-`list_table_structure` on interesting tables → `execute_sql` to query. Chrome and
-Android trace analysis is done via `INCLUDE PERFETTO MODULE chrome.xyz` /
-`android.xyz` — the included modules persist for subsequent queries against
-the same trace.
+Typical flow depends on trace type:
+
+- **Chrome traces**: `load_trace` → dedicated `chrome_*` tools
+  (`chrome_scroll_jank_summary`, `chrome_page_load_summary`,
+  `chrome_main_thread_hotspots`, `chrome_startup_summary`,
+  `chrome_web_content_interactions`) → `execute_sql` for deeper analysis
+  on the returned rows.
+- **Other traces**: `load_trace` → `list_tables` / `list_table_structure`
+  for schema discovery → `execute_sql` for queries. Call
+  `list_stdlib_modules` as an auxiliary when stdlib modules might cover
+  your analysis (Android, generic modules like `slices.with_context`).
 
 ## Example
 
