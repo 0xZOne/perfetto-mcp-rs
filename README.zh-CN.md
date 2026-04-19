@@ -4,6 +4,10 @@
 
 # perfetto-mcp-rs
 
+[![CI](https://github.com/0xZOne/perfetto-mcp-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/0xZOne/perfetto-mcp-rs/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/0xZOne/perfetto-mcp-rs)](https://github.com/0xZOne/perfetto-mcp-rs/releases)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](./LICENSE-MIT)
+
 [English](README.md) | **简体中文**
 
 让 LLM 读懂 [Perfetto](https://perfetto.dev) trace 的
