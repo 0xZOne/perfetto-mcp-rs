@@ -60,26 +60,29 @@ VERSION=v0.7.0 curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-
 
 ## 卸载
 
-每个平台一条，直接粘贴执行。从 Claude Code 和 Codex 注销、删二进制、清掉缓存的
-`trace_processor_shell`。
+和安装对称的一键命令。从 Claude Code 和 Codex 注销、删二进制、清掉缓存的
+`trace_processor_shell`。幂等——之前手动清过一部分也能安全重跑。
 
-**Linux：**
-
-```sh
-if command -v claude >/dev/null 2>&1; then claude mcp remove perfetto-mcp-rs --scope user 2>/dev/null; fi; if command -v codex >/dev/null 2>&1; then codex mcp remove perfetto-mcp-rs 2>/dev/null; fi; rm -f ~/.local/bin/perfetto-mcp-rs; rm -rf ~/.local/share/perfetto-mcp-rs
-```
-
-**macOS：**
+**Linux / macOS / Windows（Git Bash、MSYS2、Cygwin）：**
 
 ```sh
-if command -v claude >/dev/null 2>&1; then claude mcp remove perfetto-mcp-rs --scope user 2>/dev/null; fi; if command -v codex >/dev/null 2>&1; then codex mcp remove perfetto-mcp-rs 2>/dev/null; fi; rm -f ~/.local/bin/perfetto-mcp-rs; rm -rf "$HOME/Library/Application Support/perfetto-mcp-rs"
+curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.sh | sh
 ```
 
 **Windows（PowerShell）—— 先关掉 Claude Code、Codex 或任何正在占用 `.exe` 的进程：**
 
 ```powershell
-if (Get-Command claude -ErrorAction SilentlyContinue) { claude mcp remove perfetto-mcp-rs --scope user 2>$null }; if (Get-Command codex -ErrorAction SilentlyContinue) { codex mcp remove perfetto-mcp-rs 2>$null }; Remove-Item -Force "$HOME\.local\bin\perfetto-mcp-rs.exe*" -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force "$env:LOCALAPPDATA\perfetto-mcp-rs" -ErrorAction SilentlyContinue
+irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.ps1 | iex
 ```
+
+`$INSTALL_DIR`（默认 `~/.local/bin`）**不会**自动从 PATH 里清掉：
+
+- **Linux / macOS** —— 安装脚本只是 *提示* 你加 `PATH`；如果你照做了，自己
+  改 shell rc 删那行。
+- **Windows** —— 安装脚本会 *真的写* `$INSTALL_DIR` 到用户 PATH（HKCU\Environment）；
+  要删请走 系统属性 → 环境变量。
+
+其他工具可能也在用这个目录，所以卸载不主动清。
 
 ## 工具
 

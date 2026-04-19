@@ -61,26 +61,32 @@ No auto-update daemon — upgrades are explicit.
 
 ## Uninstall
 
-One-liner per platform. Unregisters the MCP server from Claude Code and Codex,
-removes the binary, and deletes the cached `trace_processor_shell`.
+Symmetric one-liner per platform. Deregisters from Claude Code and Codex,
+removes the binary, and deletes the cached `trace_processor_shell`. Idempotent
+— safe to run if any step was already done by hand.
 
-**Linux:**
-
-```sh
-if command -v claude >/dev/null 2>&1; then claude mcp remove perfetto-mcp-rs --scope user 2>/dev/null; fi; if command -v codex >/dev/null 2>&1; then codex mcp remove perfetto-mcp-rs 2>/dev/null; fi; rm -f ~/.local/bin/perfetto-mcp-rs; rm -rf ~/.local/share/perfetto-mcp-rs
-```
-
-**macOS:**
+**Linux / macOS / Windows (Git Bash, MSYS2, Cygwin):**
 
 ```sh
-if command -v claude >/dev/null 2>&1; then claude mcp remove perfetto-mcp-rs --scope user 2>/dev/null; fi; if command -v codex >/dev/null 2>&1; then codex mcp remove perfetto-mcp-rs 2>/dev/null; fi; rm -f ~/.local/bin/perfetto-mcp-rs; rm -rf "$HOME/Library/Application Support/perfetto-mcp-rs"
+curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.sh | sh
 ```
 
-**Windows (PowerShell) — close Claude Code, Codex, or anything else using the .exe first:**
+**Windows (PowerShell) — close Claude Code, Codex, or anything else using the `.exe` first:**
 
 ```powershell
-if (Get-Command claude -ErrorAction SilentlyContinue) { claude mcp remove perfetto-mcp-rs --scope user 2>$null }; if (Get-Command codex -ErrorAction SilentlyContinue) { codex mcp remove perfetto-mcp-rs 2>$null }; Remove-Item -Force "$HOME\.local\bin\perfetto-mcp-rs.exe*" -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force "$env:LOCALAPPDATA\perfetto-mcp-rs" -ErrorAction SilentlyContinue
+irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.ps1 | iex
 ```
+
+`$INSTALL_DIR` (default `~/.local/bin`) is **not** removed from your PATH:
+
+- **Linux / macOS** — the installer only *prints* a `PATH` hint; if you added
+  it to your shell rc, remove that line manually.
+- **Windows** — the installer *writes* `$INSTALL_DIR` into your user PATH
+  (HKCU\Environment); remove it via System Properties → Environment Variables
+  if you want it gone.
+
+Other tools may still depend on this directory, which is why uninstall leaves
+it in place.
 
 ## Tools
 
