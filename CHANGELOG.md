@@ -2,6 +2,10 @@
 
 ## perfetto-mcp-rs 0.x Changes
 
+### [0.8.1](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.8.1) (April 19, 2026)
+
+- **Windows fix**: `install` subcommand now correctly invokes `codex` (and any other CLI) when the installed form is a `.cmd`/`.bat` shim instead of a native `.exe`. npm-installed CLIs like OpenAI's Codex land as `codex.cmd` on Windows; v0.8.0's `Command::new("codex")` failed with `program not found` because `CreateProcessW` can't exec batch files directly. v0.8.1 resolves the path through `which::which` (applies PATHEXT consistently) and on Windows wraps `.cmd`/`.bat` shims through `cmd /c`. Surfaced by a real Windows PowerShell install run where Claude registered but Codex failed.
+
 ### [0.8.0](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.8.0) (April 19, 2026)
 
 - **New `install` / `uninstall` subcommands**. The binary now self-registers with Claude Code (`claude mcp add`) and Codex (`codex mcp add`) and self-cleans its `dirs::data_local_dir()` cache, replacing the register/deregister blocks that lived in `install.sh` / `install.ps1` / `uninstall.sh` / `uninstall.ps1` (four copies of the same CLI-schema + cache-path knowledge that had already drifted into bugs — e.g. the Git Bash `LOCALAPPDATA` cygpath issue fixed in v0.7.0's uninstall.sh). Default subcommand-less invocation still runs the MCP server, so existing client configs don't need to change. New flags: `install --scope user|local|project`, `install --binary-path <P>`, `uninstall --scope X [--keep-cache]`, and `--skip-claude` / `--skip-codex` on both.

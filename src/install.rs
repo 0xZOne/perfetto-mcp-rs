@@ -397,8 +397,18 @@ fn claude_scope_hint(scope: ClaudeScope, underlying: String) -> String {
 
 /// Run `cmd args...` and return stdout on success, a combined stderr/stdout
 /// diagnostic on failure. Never panics.
+///
+/// Program discovery is done via `which::which` (not plain `Command::new`)
+/// so both `detect_cli` and the actual spawn see the same executable. This
+/// matters on Windows: npm-installed CLIs like Codex land as `codex.cmd`
+/// shims, `which` applies PATHEXT and finds them, but `Command::new("codex")`
+/// has historically had version-dependent PATHEXT behavior — and even when
+/// discovery works, `CreateProcess` can't exec `.cmd`/`.bat` directly, so
+/// on Windows we detour batch files through `cmd /c`.
 fn run_cmd(cmd: &str, args: &[&str]) -> std::result::Result<String, String> {
-    let output = match Command::new(cmd).args(args).output() {
+    let resolved =
+        which::which(cmd).map_err(|e| format!("spawn `{cmd} {}` failed: {e}", args.join(" ")))?;
+    let output = match build_spawn_command(&resolved).args(args).output() {
         Ok(o) => o,
         Err(e) => {
             return Err(format!("spawn `{cmd} {}` failed: {e}", args.join(" ")));
@@ -423,6 +433,29 @@ fn run_cmd(cmd: &str, args: &[&str]) -> std::result::Result<String, String> {
         output.status,
         combined.trim()
     ))
+}
+
+/// On Windows, route `.cmd`/`.bat` shims through `cmd /c` — `CreateProcessW`
+/// can't exec them directly. On all other platforms (and for Windows .exe
+/// targets) spawn directly.
+#[cfg(windows)]
+fn build_spawn_command(resolved: &Path) -> Command {
+    let ext = resolved
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(str::to_ascii_lowercase);
+    if matches!(ext.as_deref(), Some("cmd") | Some("bat")) {
+        let mut c = Command::new("cmd");
+        c.arg("/c").arg(resolved);
+        c
+    } else {
+        Command::new(resolved)
+    }
+}
+
+#[cfg(not(windows))]
+fn build_spawn_command(resolved: &Path) -> Command {
+    Command::new(resolved)
 }
 
 #[cfg(test)]
