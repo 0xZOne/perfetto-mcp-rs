@@ -1,0 +1,81 @@
+#!/bin/sh
+# Stateful fake Claude / Codex CLI for install/uninstall integration tests.
+#
+# Test sets PATH=<this dir> (only) so `which::which("claude"|"codex")` and
+# `Command::new(...)` resolve to this script. Distinguishes which tool is
+# being impersonated via $0.
+#
+# State model: each tool has a single-entry "registered" flag stored at
+# "$FAKE_STATE_DIR/<tool>.registered". File **content non-empty** = registered.
+# `mcp list` prints SERVER_NAME if non-empty (empty otherwise). `mcp add`
+# writes content on exit 0. `mcp remove` truncates on exit 0. We use content
+# rather than file presence because PATH is restricted to this fixtures dir,
+# so `rm` (external binary) is unreachable; shell `>` redirection is builtin.
+#
+# Per-operation control via env vars (all optional, default 0 / empty):
+#   FAKE_{CLAUDE,CODEX}_{LIST,ADD,REMOVE}_EXIT_CODE
+#   FAKE_{CLAUDE,CODEX}_{LIST,ADD,REMOVE}_STDOUT   (extra, appended after state)
+#   FAKE_{CLAUDE,CODEX}_{LIST,ADD,REMOVE}_STDERR
+#
+# Call recording: every invocation appends "<tool>|<args>" to $FAKE_RECORD_FILE.
+#
+# Shell-builtin-only (PATH is restricted to fixtures dir; no coreutils reachable).
+
+tool="${0##*/}"
+state_dir="${FAKE_STATE_DIR:-.}"
+state_file="${state_dir}/${tool}.registered"
+
+# Record the call before any dispatch so even unknown invocations show up.
+printf '%s|%s\n' "$tool" "$*" >> "${FAKE_RECORD_FILE:-/dev/null}"
+
+# Normalize tool+op to pick the matching env var set.
+op=""
+case "$1 $2" in
+  "mcp list")   op="LIST"   ;;
+  "mcp add")    op="ADD"    ;;
+  "mcp remove") op="REMOVE" ;;
+  *)
+    # Any unsupported call: noisy error so tests fail loudly.
+    printf 'fake: unsupported invocation: %s %s\n' "$tool" "$*" >&2
+    exit 99
+    ;;
+esac
+
+case "$tool" in
+  claude) prefix="FAKE_CLAUDE_${op}" ;;
+  codex)  prefix="FAKE_CODEX_${op}"  ;;
+  *)
+    printf 'fake: unknown tool name via $0: %s\n' "$tool" >&2
+    exit 98
+    ;;
+esac
+
+# Indirect env var expansion works in POSIX sh via eval.
+eval "exit_code=\${${prefix}_EXIT_CODE:-0}"
+eval "stdout=\${${prefix}_STDOUT:-}"
+eval "stderr=\${${prefix}_STDERR:-}"
+
+[ -n "$stderr" ] && printf '%s\n' "$stderr" >&2
+
+case "$op" in
+  LIST)
+    # Only reflect state when list itself is "succeeding" — a failing list is
+    # a broken-CLI signal and should not also spam state contents.
+    if [ "$exit_code" -eq 0 ] && [ -s "$state_file" ]; then
+      # Claude-flavored format; our production parser accepts this AND the
+      # Codex whitespace-separated variant via the same line-prefix check.
+      printf 'perfetto-mcp-rs: /fake/path\n'
+    fi
+    ;;
+  ADD)
+    # Persist non-empty on "successful" add so failure cases don't leak state.
+    [ "$exit_code" -eq 0 ] && printf 'registered\n' > "$state_file"
+    ;;
+  REMOVE)
+    # Truncate via shell redirection (`rm` not reachable under restricted PATH).
+    [ "$exit_code" -eq 0 ] && : > "$state_file"
+    ;;
+esac
+
+[ -n "$stdout" ] && printf '%s\n' "$stdout"
+exit "$exit_code"

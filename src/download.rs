@@ -153,9 +153,16 @@ pub async fn ensure_binary(config: &DownloadConfig) -> Result<PathBuf> {
     Ok(binary_path)
 }
 
-fn cache_dir() -> Result<PathBuf> {
+/// Unversioned cache root `<data-local>/perfetto-mcp-rs`. Install/uninstall
+/// subcommands clean this root so all historical `TP_VERSION` subdirs are
+/// swept regardless of which binary runs the cleanup.
+pub(crate) fn cache_root() -> Result<PathBuf> {
     let base = dirs::data_local_dir().context("cannot determine local data directory")?;
-    Ok(base.join("perfetto-mcp-rs").join(TP_VERSION))
+    Ok(base.join("perfetto-mcp-rs"))
+}
+
+fn cache_dir() -> Result<PathBuf> {
+    Ok(cache_root()?.join(TP_VERSION))
 }
 
 #[derive(Debug, PartialEq, Eq)]

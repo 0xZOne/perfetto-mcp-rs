@@ -7,6 +7,7 @@ pub(crate) mod proto {
 
 pub mod download;
 pub mod error;
+pub mod install;
 pub(crate) mod query;
 pub mod server;
 pub mod tp_client;
