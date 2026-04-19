@@ -41,9 +41,32 @@ Both installers drop the prebuilt binary into `~/.local/bin` (or
 and — if Claude Code and/or Codex are installed — register it automatically.
 Restart Claude Code or start a new Codex session to pick it up.
 
+**Claude scope**: registration defaults to `--scope user` (available from any
+directory). For a project-local install, set `SCOPE=local` (or `project`) and
+run the script from that project's directory:
+
+```sh
+SCOPE=local bash -c 'curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh'
+```
+
+PowerShell equivalent: `$env:SCOPE = 'local'; irm ... | iex`. Codex has no
+scope concept and ignores this variable.
+
 Supported platforms: linux amd64/arm64, macOS amd64/arm64, Windows amd64.
 If you'd rather not run a script, grab the binary directly from the
-[releases page](https://github.com/0xZOne/perfetto-mcp-rs/releases).
+[releases page](https://github.com/0xZOne/perfetto-mcp-rs/releases). Release
+assets are named `perfetto-mcp-rs-<platform>` (e.g. `perfetto-mcp-rs-linux-amd64`);
+rename or address the downloaded file explicitly when invoking `install`, and
+on Unix mark it executable first (`chmod +x`) — the subcommand refuses
+non-executable paths to avoid writing a broken MCP entry. Example:
+
+```sh
+# Linux amd64 example — adjust the asset name for your platform.
+curl -fsSL -o perfetto-mcp-rs \
+  https://github.com/0xZOne/perfetto-mcp-rs/releases/latest/download/perfetto-mcp-rs-linux-amd64
+chmod +x perfetto-mcp-rs
+./perfetto-mcp-rs install --scope user --binary-path "$PWD/perfetto-mcp-rs"
+```
 
 ## Upgrade
 
@@ -76,6 +99,19 @@ curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninsta
 ```powershell
 irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.ps1 | iex
 ```
+
+**Scoped installs (local / project)**: `claude` stores local/project entries
+keyed by project directory, so uninstall must use the same `SCOPE` AND run
+from that directory. Omitting this leaves the scoped Claude entry behind while
+the wrapper still removes the binary and cache:
+
+```sh
+# Ran `SCOPE=local bash install.sh` in ~/work/foo earlier? Then:
+cd ~/work/foo
+SCOPE=local bash -c 'curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.sh | sh'
+```
+
+PowerShell equivalent: `cd <original-project-dir>; $env:SCOPE = 'local'; irm ... | iex`.
 
 `$INSTALL_DIR` (default `~/.local/bin`) is **not** removed from your PATH:
 

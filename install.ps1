@@ -7,6 +7,8 @@
 #   $env:INSTALL_DIR   Where to place the binary (default: $HOME\.local\bin)
 #   $env:REPO          GitHub slug to download from (default: 0xZOne/perfetto-mcp-rs)
 #   $env:VERSION       Release tag to install (default: latest)
+#   $env:SCOPE         Claude scope: user|local|project (default: user). For
+#                      local/project, run this script from the target project dir.
 #
 # Written to run under both FullLanguage and ConstrainedLanguage PowerShell
 # modes — uses cmdlets instead of .NET static methods wherever possible so
@@ -96,59 +98,31 @@ function Install-PerfettoMcp {
         }
     }
 
-    # Forward-slash form avoids backslash-escaping hazards in JSON configs.
+    # Forward-slash form avoids backslash-escaping hazards in JSON configs
+    # that Claude/Codex eventually write. The binary consumes this verbatim
+    # via `--binary-path`.
     $clientPath = ($dest -replace '\\', '/')
 
-    if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-        Write-Host ""
-        Write-Host "NOTE: 'claude' CLI not found. To use this server with Claude Code, install"
-        Write-Host "Claude Code first, then run:"
-        Write-Host ""
-        Write-Host "    claude mcp add perfetto-mcp-rs --scope user $clientPath"
-        Write-Host ""
-    } else {
-        # First-install `claude mcp remove` legitimately exits non-zero (nothing
-        # to remove). Under PS 7.4+ with $ErrorActionPreference='Stop', the
-        # $PSNativeCommandUseErrorActionPreference default promotes that non-zero
-        # exit to a terminating error and kills the script before `add` runs.
-        # Relax EAP for the native calls and merge their stderr into stdout so
-        # any complaint is fully swallowed.
-        $savedEAP = $ErrorActionPreference
-        $ErrorActionPreference = 'SilentlyContinue'
-        try { & claude mcp remove perfetto-mcp-rs --scope user 2>&1 | Out-Null } catch {}
-        try { & claude mcp add perfetto-mcp-rs --scope user $clientPath 2>&1 | Out-Null } catch {}
-        $claudeAddExit = $LASTEXITCODE
-        $ErrorActionPreference = $savedEAP
-
-        if ($claudeAddExit -eq 0) {
-            _info "registered with Claude Code (user scope). Restart Claude Code to pick it up."
-        } else {
-            _warn "failed to register with Claude Code. Run manually:"
-            Write-Host "    claude mcp add perfetto-mcp-rs --scope user $clientPath"
-        }
+    # Delegate Claude + Codex registration to the binary's `install`
+    # subcommand (v0.8+). The binary owns CLI schemas and cache-dir
+    # knowledge — keeping it out of PowerShell avoids the four-places drift
+    # problem that motivated this refactor. Scope is `user` unless
+    # $env:SCOPE overrides.
+    $scope = if ($env:SCOPE) { $env:SCOPE } else { 'user' }
+    $savedEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    $registerExit = 1
+    try {
+        & $dest install --scope $scope --binary-path $clientPath
+        $registerExit = $LASTEXITCODE
+    } catch {
+        $registerExit = 1
     }
-
-    if (-not (Get-Command codex -ErrorAction SilentlyContinue)) {
-        Write-Host ""
-        Write-Host "NOTE: 'codex' CLI not found. To use this server with Codex, install"
-        Write-Host "Codex first, then run:"
-        Write-Host ""
-        Write-Host "    codex mcp add perfetto-mcp-rs -- $clientPath"
-        Write-Host ""
+    $ErrorActionPreference = $savedEAP
+    if ($registerExit -eq 0) {
+        _info "self-registered with available CLIs (scope=$scope)."
     } else {
-        $savedEAP = $ErrorActionPreference
-        $ErrorActionPreference = 'SilentlyContinue'
-        try { & codex mcp remove perfetto-mcp-rs 2>&1 | Out-Null } catch {}
-        try { & codex mcp add perfetto-mcp-rs -- $clientPath 2>&1 | Out-Null } catch {}
-        $codexAddExit = $LASTEXITCODE
-        $ErrorActionPreference = $savedEAP
-
-        if ($codexAddExit -eq 0) {
-            _info "registered with Codex. New Codex sessions will pick it up."
-        } else {
-            _warn "failed to register with Codex. Run manually:"
-            Write-Host "    codex mcp add perfetto-mcp-rs -- $clientPath"
-        }
+        _warn "binary self-install reported issues (exit $registerExit); check output above."
     }
 }
 

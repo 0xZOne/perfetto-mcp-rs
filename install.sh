@@ -8,12 +8,18 @@
 #   INSTALL_DIR   Where to place the binary (default: $HOME/.local/bin)
 #   REPO          GitHub slug to download from (default: 0xZOne/perfetto-mcp-rs)
 #   VERSION       Release tag to install (default: latest)
+#   SCOPE         Claude scope: user|local|project (default: user). For
+#                 local/project, run this script from the target project dir.
 
 set -eu
 
 : "${REPO:=0xZOne/perfetto-mcp-rs}"
 : "${INSTALL_DIR:=${HOME}/.local/bin}"
 : "${VERSION:=latest}"
+# Claude scope to register under: user | local | project. Codex ignores scope
+# (it has no scope concept). For local/project, run install.sh from the
+# target project directory.
+: "${SCOPE:=user}"
 
 BIN_NAME="perfetto-mcp-rs"
 
@@ -84,63 +90,6 @@ add_to_user_path_windows() {
   esac
 }
 
-register_with_claude() {
-  bin_path="$1"
-  # claude.exe on Windows wants a Windows-form path, not /c/Users/... from
-  # MSYS. `cygpath -m` emits forward slashes (C:/Users/...), which Windows
-  # APIs accept and which avoids backslash-escaping hazards in JSON.
-  if command -v cygpath >/dev/null 2>&1; then
-    bin_path="$(cygpath -m "$bin_path")"
-  fi
-  if ! command -v claude >/dev/null 2>&1; then
-    cat <<EOF
-
-NOTE: 'claude' CLI not found. To use this server with Claude Code, install
-Claude Code first, then run:
-
-    claude mcp add perfetto-mcp-rs --scope user ${bin_path}
-
-EOF
-    return
-  fi
-  # Idempotent: remove stale entry first, then add. Remove may fail harmlessly.
-  claude mcp remove perfetto-mcp-rs --scope user >/dev/null 2>&1 || true
-  if claude mcp add perfetto-mcp-rs --scope user "$bin_path" >/dev/null 2>&1; then
-    info "Registered with Claude Code (user scope). Restart Claude Code to pick it up."
-  else
-    warn "Failed to register with Claude Code. Run manually:"
-    printf '    claude mcp add perfetto-mcp-rs --scope user %s\n' "$bin_path"
-  fi
-}
-
-register_with_codex() {
-  bin_path="$1"
-  # codex.exe on Windows also wants a Windows-form path, not /c/Users/...
-  # from MSYS.
-  if command -v cygpath >/dev/null 2>&1; then
-    bin_path="$(cygpath -m "$bin_path")"
-  fi
-  if ! command -v codex >/dev/null 2>&1; then
-    cat <<EOF
-
-NOTE: 'codex' CLI not found. To use this server with Codex, install
-Codex first, then run:
-
-    codex mcp add perfetto-mcp-rs -- ${bin_path}
-
-EOF
-    return
-  fi
-  # Idempotent: remove stale entry first, then add. Remove may fail harmlessly.
-  codex mcp remove perfetto-mcp-rs >/dev/null 2>&1 || true
-  if codex mcp add perfetto-mcp-rs -- "$bin_path" >/dev/null 2>&1; then
-    info "Registered with Codex. New Codex sessions will pick it up."
-  else
-    warn "Failed to register with Codex. Run manually:"
-    printf '    codex mcp add perfetto-mcp-rs -- %s\n' "$bin_path"
-  fi
-}
-
 main() {
   need_cmd curl
   need_cmd uname
@@ -208,8 +157,33 @@ EOF
       ;;
   esac
 
-  register_with_claude "${INSTALL_DIR}/${bin_file}"
-  register_with_codex "${INSTALL_DIR}/${bin_file}"
+  # Delegate Claude/Codex registration + cache accounting to the freshly-
+  # installed binary's `install` subcommand (v0.8+). Binary owns the CLI
+  # schemas + dirs::data_local_dir() knowledge so the shell doesn't have
+  # to mirror it.
+  #
+  # Windows POSIX shells expose INSTALL_DIR as `/c/Users/...`; claude/codex
+  # need Windows-form paths, and the binary doesn't have cygpath — so the
+  # wrapper converts here, on this side of the --binary-path handoff.
+  register_path_native="${INSTALL_DIR}/${bin_file}"
+  case "$platform" in
+    windows-*)
+      if command -v cygpath >/dev/null 2>&1; then
+        register_path_native="$(cygpath -m "$register_path_native")"
+      fi
+      ;;
+  esac
+
+  # SCOPE env var (default `user`) plumbs through as --scope. For
+  # --scope local|project the caller must invoke install.sh from the
+  # target project directory.
+  if "${INSTALL_DIR}/${bin_file}" install \
+       --scope "$SCOPE" \
+       --binary-path "$register_path_native"; then
+    info "Self-registered with available CLIs."
+  else
+    warn "binary self-install reported issues; check output above."
+  fi
 }
 
 main "$@"

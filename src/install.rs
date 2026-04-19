@@ -42,12 +42,17 @@ impl std::fmt::Display for ClaudeScope {
 
 #[derive(clap::Args, Debug)]
 pub struct InstallArgs {
-    /// Path to register with Claude/Codex. Shell wrappers MUST pass this
-    /// with `${INSTALL_DIR}/${bin_file}` — on Linux, `current_exe()` reads
-    /// `/proc/self/exe` which is already the symlink target, and we want
-    /// to preserve the `$INSTALL_DIR` path users see.
-    #[arg(long)]
-    pub binary_path: Option<PathBuf>,
+    /// Path to register with Claude/Codex. Required — we deliberately do
+    /// NOT fall back to `current_exe()` even when the binary is invoking
+    /// itself: on Linux `current_exe()` reads `/proc/self/exe` which is
+    /// always the symlink-resolved target. For a versioned install like
+    /// `~/bin/perfetto-mcp-rs -> ~/opt/perfetto-mcp-rs-0.8.0/bin`, falling
+    /// back would pin the 0.8.0 path and break future symlink re-point
+    /// upgrades. Shell wrappers pass this automatically. For manual
+    /// invocation use `$(which perfetto-mcp-rs)` — `which` does NOT
+    /// follow symlinks, so it yields the right stable path.
+    #[arg(long, required = true)]
+    pub binary_path: PathBuf,
 
     /// Claude scope (user/local/project). Ignored by Codex (no scope concept).
     /// For `--scope local` / `project`, run from the target project directory.
@@ -96,13 +101,53 @@ pub fn run_install(args: InstallArgs) -> Result<()> {
     // handled here: Rust's Windows path parser doesn't understand them and
     // we can't reach `cygpath` from the binary. install.sh / install.ps1
     // are responsible for `cygpath -m` before passing `--binary-path`.
-    let bin = match args.binary_path {
-        Some(p) => std::path::absolute(&p)
-            .with_context(|| format!("failed to make --binary-path absolute: {}", p.display()))?,
-        // `current_exe()` already returns an absolute path per its docs.
-        None => std::env::current_exe()
-            .context("cannot determine current executable path (and --binary-path not provided)")?,
-    };
+    let bin = std::path::absolute(&args.binary_path).with_context(|| {
+        format!(
+            "failed to make --binary-path absolute: {}",
+            args.binary_path.display()
+        )
+    })?;
+
+    // Existence + regular-file + executable check. Without these, `install
+    // --binary-path X` silently writes a dead MCP entry: claude/codex `mcp
+    // add` accept any string and the failure only surfaces at client spawn
+    // time, long after the user has moved on.
+    //
+    // The executable check matters for the advertised "direct" workflow in
+    // README ("download from releases, then `perfetto-mcp-rs install
+    // --binary-path /path`"): browser-downloaded Unix binaries land as
+    // 0644, so `is_file` isn't enough. On Windows there's no exec bit, so
+    // the Unix check is gated behind `#[cfg(unix)]`.
+    let md = std::fs::metadata(&bin).map_err(|e| {
+        anyhow!(
+            "--binary-path {} is not accessible: {e}. Registering it would write a \
+             broken MCP entry; re-check the path, or use the install.sh / install.ps1 \
+             wrapper which downloads to a known location first.",
+            bin.display()
+        )
+    })?;
+    if !md.is_file() {
+        return Err(anyhow!(
+            "--binary-path {} is not a regular file",
+            bin.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = md.permissions().mode();
+        if mode & 0o111 == 0 {
+            return Err(anyhow!(
+                "--binary-path {} is not executable (mode {:o}). Browser-downloaded \
+                 release binaries commonly land as 0644; run `chmod +x {}` first, or \
+                 use the install.sh wrapper which sets the bit automatically.",
+                bin.display(),
+                mode & 0o777,
+                bin.display()
+            ));
+        }
+    }
+
     println!(
         "==> Installing {SERVER_NAME} (binary={}, scope={})",
         bin.display(),
@@ -244,30 +289,42 @@ fn deregister_claude(scope: ClaudeScope) -> Outcome {
         return Outcome::Skipped("claude not found, skipping".into());
     }
 
-    // Same reasoning as `register_claude`: no `mcp list` probe. Attempt
-    // `remove` and classify the stderr. `claude_remove_error_is_not_found`
-    // recognises the benign "no <scope>-scoped MCP server found" response
-    // and rejects any stderr that also contains corruption/error markers.
+    // No `mcp list` probe — list is not passive (it spawns visible stdio
+    // servers for health checks). Attempt `remove` and classify the stderr.
     match run_cmd(
         "claude",
         &["mcp", "remove", SERVER_NAME, "--scope", scope.as_str()],
     ) {
         Ok(_) => Outcome::Done(format!("deregistered from Claude Code (scope={scope})")),
-        Err(e) if claude_remove_error_is_not_found(&e) => {
-            Outcome::Skipped(not_found_skip_message(scope))
-        }
-        Err(e) => Outcome::Failed(claude_scope_hint(scope, format!("remove: {e}"))),
-    }
-}
 
-fn not_found_skip_message(scope: ClaudeScope) -> String {
-    match scope {
-        ClaudeScope::User => "no user-scoped perfetto-mcp-rs registration to remove".into(),
-        ClaudeScope::Local | ClaudeScope::Project => format!(
-            "scope={scope}: not registered in this project directory. If you installed \
-             from a different directory, re-run `perfetto-mcp-rs uninstall --scope {scope}` \
-             from there; otherwise the entry is already gone."
-        ),
+        // `not found` response classification depends on scope:
+        //
+        // - scope == User: user-scope entries are visible from any CWD, so a
+        //   "not found" genuinely means nothing to remove — benign Skipped.
+        //   The wrapper treats Skipped as success and may remove the binary.
+        //
+        // - scope == Local/Project: these scopes are CWD-keyed. "not found"
+        //   here could mean "this scope never had an entry" **or** "the user
+        //   is in the wrong CWD and the real registration is still alive
+        //   somewhere else". We can't tell which — and the wrapper would
+        //   happily delete the binary on Skipped, leaving a dangling
+        //   registration pointing at a deleted path. Return Failed with a
+        //   hint so the wrapper keeps the binary and the user can retry
+        //   from the right directory (or confirm the entry was truly gone).
+        Err(e) if claude_remove_error_is_not_found(&e) => match scope {
+            ClaudeScope::User => {
+                Outcome::Skipped("no user-scoped perfetto-mcp-rs registration to remove".into())
+            }
+            ClaudeScope::Local | ClaudeScope::Project => Outcome::Failed(format!(
+                "scope={scope}: `claude mcp remove` reported no such entry here. Either the \
+                 registration was already removed, or you are not in the project directory \
+                 used at install time. Run `uninstall --scope {scope}` from that directory; \
+                 if the entry is truly gone, pass --skip-claude to skip this check. Keeping \
+                 binary in place."
+            )),
+        },
+
+        Err(e) => Outcome::Failed(claude_scope_hint(scope, format!("remove: {e}"))),
     }
 }
 

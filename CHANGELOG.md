@@ -2,6 +2,29 @@
 
 ## perfetto-mcp-rs 0.x Changes
 
+### [0.8.0](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.8.0) (April 19, 2026)
+
+- **New `install` / `uninstall` subcommands**. The binary now self-registers with Claude Code (`claude mcp add`) and Codex (`codex mcp add`) and self-cleans its `dirs::data_local_dir()` cache, replacing the register/deregister blocks that lived in `install.sh` / `install.ps1` / `uninstall.sh` / `uninstall.ps1` (four copies of the same CLI-schema + cache-path knowledge that had already drifted into bugs — e.g. the Git Bash `LOCALAPPDATA` cygpath issue fixed in v0.7.0's uninstall.sh). Default subcommand-less invocation still runs the MCP server, so existing client configs don't need to change. New flags: `install --scope user|local|project`, `install --binary-path <P>`, `uninstall --scope X [--keep-cache]`, and `--skip-claude` / `--skip-codex` on both.
+- **Shell scripts shrink to distribution glue** — `install.sh` and `uninstall.sh` (plus PowerShell counterparts) now do download / platform detect / file-lock aside / PATH hint / binary delete, and delegate all Claude/Codex registration + cache cleanup to `perfetto-mcp-rs install|uninstall`. Uninstall scripts **preserve the binary on subcommand failure** so users can fix the underlying issue (locked cache, wrong project dir, broken config) and re-run — only a successful uninstall (or confirmed v0.7 "no subcommand" case, or already-missing binary) deletes the binary.
+- **`SCOPE` env var** on all four scripts (default `user`) plumbs through to `--scope`. For local/project installs, run the script from the target project directory: `SCOPE=local bash install.sh` / `SCOPE=local bash uninstall.sh`. Claude stores local/project scope in a CWD-keyed way inside `~/.claude.json` / project's `.mcp.json`, so the CWD must match at both install and uninstall time.
+- **No more `claude mcp list` probe on the install/uninstall paths**. We used to list before add/remove to distinguish first-install from upgrade, but `claude mcp list` is **not a passive probe**: it skips the workspace-trust dialog and spawns every visible stdio server to run a health check. Running that from `--scope local|project` in a hostile or broken project directory is unsafe (arbitrary command execution from that repo's `.mcp.json`) and unreliable (hangs / fails on any broken sibling server). v0.8.0 always calls `mcp remove` first and classifies its stderr: `No <scope>-scoped MCP server found with name: ...` (exit 1) is benign; anything else — including output that mixes corruption-recovery text with the benign line — is a hard failure. See `src/install.rs::claude_remove_error_is_not_found` + its unit tests for the exact pattern.
+- **`PERFETTO_STARTUP_TIMEOUT_MS` / `PERFETTO_QUERY_TIMEOUT_MS` are read lazily inside `run_server`**, not by clap at top-level parse. A stale or invalid value in the user's shell no longer blocks `perfetto-mcp-rs install` / `uninstall` with a parse error — those maintenance commands don't care about server timeouts. Precedence preserved: explicit `--flag` > env var > built-in default; invalid env in server mode still fails loudly.
+- `install.rs::run_install` absolutizes `--binary-path` via `std::path::absolute` before passing it to the MCP clients. MCP clients spawn the registered command from their own working directory, so a relative `./perfetto-mcp-rs` would silently break. We deliberately don't `canonicalize` (that would resolve symlinks and diverge from the `$INSTALL_DIR` path users see). Windows POSIX paths (`/c/Users/...` from Git Bash) are converted by the shell wrapper via `cygpath -m` before reaching the Rust binary.
+- **Migration 0.7.x → 0.8.0**: re-run `install.sh` (or `install.ps1`) — the new binary brings the subcommands and subsequent `uninstall.sh` picks them up. Uninstalling a 0.7.x install with the new `uninstall.sh` only deletes the binary and prints a manual-cleanup hint, because the old binary has no `uninstall` subcommand. Manual cleanup command bundle for reference:
+  ```sh
+  claude mcp remove perfetto-mcp-rs --scope user
+  codex  mcp remove perfetto-mcp-rs
+  # Cache (pick the one for your OS):
+  rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/perfetto-mcp-rs"   # Linux
+  rm -rf "$HOME/Library/Application Support/perfetto-mcp-rs"      # macOS
+  # Windows Git Bash/MSYS ($LOCALAPPDATA is a native 'C:\...' path that
+  # POSIX rm can't walk; convert with cygpath, or use PowerShell):
+  rm -rf "$(cygpath -u "$LOCALAPPDATA")/perfetto-mcp-rs"          # Git Bash
+  # PowerShell: Remove-Item -Recurse -Force "$env:LOCALAPPDATA\perfetto-mcp-rs"
+  ```
+- Ship includes 23 hermetic integration contracts (`tests/install_subcommand.rs`) exercising the subcommands via stateful shell fixtures (`tests/fixtures/{claude,codex}`), plus 12 unit tests in `src/install.rs`. Integration tests run under a restricted `PATH=<fixtures>` so `which::which` can never find real CLIs. Design in `docs/plans/v0.8-binary-self-install.zh-CN.md`.
+- `cargo install perfetto-mcp-rs` remains a **developer-fallback channel** only — it requires a system `protoc` because `build.rs` invokes `prost-build`. End users should use `install.sh` / `install.ps1`.
+
 ### [0.7.0](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.7.0) (April 18, 2026)
 
 - **Breaking**: tool surface change from v0.6. Four Chrome domain tools return as row-preserving thin wrappers over PerfettoSQL stdlib views, plus one new tool. v0.5→v0.7 upgraders see a fully new Chrome tool set; v0.6→v0.7 see these as additions.

@@ -6,19 +6,26 @@
 #
 # Environment overrides:
 #   INSTALL_DIR   Where the binary lives (default: $HOME/.local/bin)
+#   SCOPE         Claude scope at install time: user|local|project (default:
+#                 user). For local/project, run this script from the original
+#                 project directory so the scoped entry is reachable.
 #
-# Idempotent: missing CLI / missing binary / empty cache dir are silent
-# no-ops. claude/codex `mcp remove` failures (including "never registered")
-# are surfaced with their raw output so users can distinguish benign cases
-# from real config errors. PATH is intentionally not modified — see README.
+# The binary's `uninstall` subcommand (v0.8+) owns deregistration + cache
+# cleanup. This wrapper only handles:
+#   (a) delegating to the binary when present and new enough,
+#   (b) a best-effort manual-hint fallback for missing-binary / v0.7-binary
+#       edge cases,
+#   (c) removing the binary itself after a successful uninstall (a running
+#       .exe can't delete itself on Windows).
+#
+# Preserves the binary on subcommand failure so the user can fix the issue
+# (locked cache, wrong project dir, etc.) and re-run.
 
 set -eu
 
-# Capture whether the user explicitly set INSTALL_DIR before we coalesce the
-# default — used below to suppress the "match install-time INSTALL_DIR" hint
-# for the common case where neither install nor uninstall touched it.
 INSTALL_DIR_OVERRIDDEN="${INSTALL_DIR:+yes}"
 : "${INSTALL_DIR:=${HOME}/.local/bin}"
+: "${SCOPE:=user}"
 
 BIN_NAME="perfetto-mcp-rs"
 
@@ -31,146 +38,115 @@ detect_platform() {
     linux)                printf 'linux' ;;
     darwin)               printf 'macos' ;;
     msys*|mingw*|cygwin*) printf 'windows' ;;
-    *)                    printf 'linux' ;;  # best-effort fallback
-  esac
-}
-
-# Cache directory used by src/download.rs (`dirs::data_local_dir()` + "perfetto-mcp-rs").
-# Empty output means "skip cache cleanup" — the caller treats that as a no-op.
-# Trailing `return 0` is load-bearing: under `set -e` (POSIX sh / dash), a
-# failing `[ -n "$x" ] && printf ...` chain at the function tail would make
-# the function exit non-zero, which trips errexit on `cache="$(cache_dir ...)"`
-# and aborts the entire uninstall before "Done." prints.
-cache_dir() {
-  case "$1" in
-    linux)
-      base="${XDG_DATA_HOME:-}"
-      [ -n "$base" ] || { [ -n "${HOME:-}" ] && base="${HOME}/.local/share"; }
-      [ -n "$base" ] && printf '%s/perfetto-mcp-rs' "$base"
-      ;;
-    macos)
-      [ -n "${HOME:-}" ] && printf '%s/Library/Application Support/perfetto-mcp-rs' "$HOME"
-      ;;
-    windows)
-      base="${LOCALAPPDATA:-}"
-      # Git Bash / MSYS2 / Cygwin expose LOCALAPPDATA as a native Windows path
-      # (e.g. C:\Users\Foo\AppData\Local). POSIX `[ -d ]` and `rm -rf` won't
-      # walk that — convert to a unix-form path (/c/Users/Foo/...) so the
-      # caller's directory test and removal actually hit the right tree.
-      if [ -n "$base" ] && command -v cygpath >/dev/null 2>&1; then
-        base="$(cygpath -u "$base" 2>/dev/null || printf '%s' "$base")"
-      fi
-      [ -n "$base" ] && printf '%s/perfetto-mcp-rs' "$base"
-      ;;
-  esac
-  return 0
-}
-
-deregister_from_claude() {
-  if ! command -v claude >/dev/null 2>&1; then
-    cat <<EOF
-
-NOTE: 'claude' CLI not found. If you registered the server with Claude Code
-on another machine or before installing the CLI, run:
-
-    claude mcp remove perfetto-mcp-rs --scope user
-
-EOF
-    return
-  fi
-  # We can't tell "server never registered" (benign) apart from "config broken"
-  # (real failure) just from the exit code, so capture and surface the output
-  # on non-zero. Letting the user judge beats silently lying about success.
-  output="$(claude mcp remove perfetto-mcp-rs --scope user 2>&1)" && claude_exit=0 || claude_exit=$?
-  if [ "$claude_exit" -eq 0 ]; then
-    info "Deregistered from Claude Code (user scope). Restart Claude Code to drop it."
-  else
-    warn "claude mcp remove exited ${claude_exit}. Output:"
-    printf '%s\n' "$output" | sed 's/^/    /'
-    warn "Safe to ignore if perfetto-mcp-rs was never registered. Otherwise verify with: claude mcp list"
-  fi
-}
-
-deregister_from_codex() {
-  if ! command -v codex >/dev/null 2>&1; then
-    cat <<EOF
-
-NOTE: 'codex' CLI not found. If you registered the server with Codex on
-another machine or before installing the CLI, run:
-
-    codex mcp remove perfetto-mcp-rs
-
-EOF
-    return
-  fi
-  output="$(codex mcp remove perfetto-mcp-rs 2>&1)" && codex_exit=0 || codex_exit=$?
-  if [ "$codex_exit" -eq 0 ]; then
-    info "Deregistered from Codex. New Codex sessions will drop it."
-  else
-    warn "codex mcp remove exited ${codex_exit}. Output:"
-    printf '%s\n' "$output" | sed 's/^/    /'
-    warn "Safe to ignore if perfetto-mcp-rs was never registered. Otherwise verify with: codex mcp list"
-  fi
-}
-
-remove_binary() {
-  platform="$1"
-  bin_file="${BIN_NAME}"
-  case "$platform" in
-    windows) bin_file="${BIN_NAME}.exe" ;;
-  esac
-
-  target="${INSTALL_DIR}/${bin_file}"
-
-  if [ -e "$target" ]; then
-    if rm -f "$target" 2>/dev/null; then
-      info "Removed ${target}"
-    else
-      warn "Could not remove ${target} (is an MCP client still running it? close Claude Code / Codex and retry)"
-    fi
-  else
-    info "No binary at ${target} (already removed or never installed)."
-  fi
-
-  # Sweep aside files left by prior installs on Windows.
-  case "$platform" in
-    windows)
-      # Loop with for-glob; if no match, the literal pattern stays and we skip it.
-      for aside in "${INSTALL_DIR}/${bin_file}".old-*; do
-        [ -e "$aside" ] || continue
-        if rm -f "$aside" 2>/dev/null; then
-          info "Removed aside ${aside}"
-        else
-          warn "Could not remove ${aside} (still locked?)"
-        fi
-      done
-      ;;
+    *)                    printf 'linux' ;;  # best-effort
   esac
 }
 
 main() {
   platform="$(detect_platform)"
+  bin_file="${BIN_NAME}"
+  case "$platform" in
+    windows) bin_file="${BIN_NAME}.exe" ;;
+  esac
 
-  info "Uninstalling ${BIN_NAME} from ${INSTALL_DIR}"
+  info "Uninstalling ${BIN_NAME} from ${INSTALL_DIR} (scope=${SCOPE})"
   if [ "${INSTALL_DIR_OVERRIDDEN:-no}" = "yes" ]; then
-    info "Using INSTALL_DIR=${INSTALL_DIR} (override). If you customized INSTALL_DIR at install time, make sure this matches."
+    info "Using INSTALL_DIR=${INSTALL_DIR} (override). Must match the install-time value."
   fi
 
-  deregister_from_claude
-  deregister_from_codex
-  remove_binary "$platform"
+  removable=no
 
-  cache="$(cache_dir "$platform")"
-  if [ -z "$cache" ]; then
-    info "Skipping cache cleanup (could not determine cache directory; HOME or LOCALAPPDATA unset?)."
-  elif [ -d "$cache" ]; then
-    if rm -rf "$cache" 2>/dev/null; then
-      info "Removed cache ${cache}"
+  if [ -e "${INSTALL_DIR}/${bin_file}" ]; then
+    # Detect v0.8+ via top-level --help output: the binary prints its
+    # subcommands there; v0.7 and older don't have `uninstall`. Do NOT use
+    # `uninstall --help`: clap's --help is a short-circuit arg and would
+    # exit 0 on v0.7 (treating "uninstall" as an unchecked positional).
+    # grep -E needs POSIX [[:space:]] — `\s` isn't portable.
+    help_status=0
+    help_output="$("${INSTALL_DIR}/${bin_file}" --help 2>&1)" || help_status=$?
+
+    if [ "$help_status" -eq 0 ]; then
+      if printf '%s\n' "$help_output" | grep -qE '^[[:space:]]+uninstall([[:space:]]|$)'; then
+        if "${INSTALL_DIR}/${bin_file}" uninstall --scope "$SCOPE"; then
+          removable=yes
+        else
+          warn "binary uninstall failed under --scope ${SCOPE}; **keeping binary in place**"
+          warn "for retry. Common causes: locked cache dir, or --scope local/project run"
+          warn "from the wrong directory. Fix the issue and re-run uninstall.sh."
+          # removable stays no
+        fi
+      else
+        # v0.7 install.sh / install.ps1 only ever registered with --scope user
+        # (no scope flag at all in those releases) — hardcode that here, even
+        # if the current $SCOPE is local/project. Otherwise we'd hand the user
+        # a command that looks right for v0.8 semantics but can't reach the
+        # actual v0.7 user-scope entry.
+        warn "old binary (v0.7) without 'uninstall' subcommand; manual cleanup needed:"
+        warn "  claude mcp remove perfetto-mcp-rs --scope user"
+        warn "  codex  mcp remove perfetto-mcp-rs"
+        warn "  (cache: see CHANGELOG Migration section for 3-platform commands)"
+        removable=yes
+      fi
     else
-      warn "Could not remove cache ${cache}"
+      warn "installed binary exists but --help failed; **keeping it in place**"
+      warn "for inspection/retry instead of misclassifying it as v0.7."
+      printf '%s\n' "$help_output" | sed 's/^/    /' >&2
+      # removable stays no
     fi
   else
-    info "No cache at ${cache} (already removed or never downloaded)."
+    # Recovery: binary already removed/moved. Best-effort deregister via
+    # the CLIs directly. Cache cleanup is NOT mirrored in shell — that's
+    # Rust's single source of truth (`dirs::data_local_dir()`), and
+    # repeating the 3-platform rules here is exactly what this refactor
+    # is getting rid of. Print manual commands for the rare recovery case.
+    warn "binary missing at ${INSTALL_DIR}/${bin_file}; running shell fallback for deregistration."
+    # Hardcode --scope user here, regardless of the caller's $SCOPE. We
+    # can't tell whether the missing binary was v0.7 (only registered
+    # user-scope) or v0.8 (could be any scope); user-scope is the safe
+    # common denominator. If the user actually had a local/project
+    # registration, they need a `cd` + manual `claude mcp remove --scope X`
+    # anyway because local/project entries are CWD-keyed.
+    command -v claude >/dev/null 2>&1 \
+      && claude mcp remove perfetto-mcp-rs --scope user 2>&1 | sed 's/^/    /'
+    command -v codex >/dev/null 2>&1 \
+      && codex mcp remove perfetto-mcp-rs 2>&1 | sed 's/^/    /'
+    warn "If you also had a --scope local/project registration, from that project dir run:"
+    warn "  claude mcp remove perfetto-mcp-rs --scope local    # or --scope project"
+    warn "Cache not auto-cleaned (binary missing). Remove manually:"
+    warn "  Linux:   rm -rf \"\${XDG_DATA_HOME:-\$HOME/.local/share}/perfetto-mcp-rs\""
+    warn "  macOS:   rm -rf \"\$HOME/Library/Application Support/perfetto-mcp-rs\""
+    warn "  Windows (Git Bash): rm -rf \"\$(cygpath -u \"\$LOCALAPPDATA\")/perfetto-mcp-rs\""
+    warn "  Windows (PowerShell): Remove-Item -Recurse -Force \"\$env:LOCALAPPDATA\\perfetto-mcp-rs\""
+    removable=yes  # nothing to remove
+  fi
+
+  if [ "$removable" = "yes" ]; then
+    # Windows holds a DELETE lock on a running .exe; `rm -f` would fail.
+    # `mv` is allowed on locked files, so rename aside first. The aside is
+    # best-effort cleaned; if still locked, next install.sh will sweep it.
+    #
+    # Also sweep any pre-existing `.old-*` leftovers from earlier upgrades
+    # (install.sh:128 does the same sweep on fresh installs; uninstall.ps1
+    # does it too; this branch needs to match or upgraded-then-uninstalled
+    # Git Bash users are left with hidden stale copies in INSTALL_DIR).
+    case "$platform" in
+      windows)
+        if [ -e "${INSTALL_DIR}/${bin_file}" ]; then
+          ts="$(date +%s)"
+          mv "${INSTALL_DIR}/${bin_file}" "${INSTALL_DIR}/${bin_file}.old-${ts}" 2>/dev/null \
+            || warn "could not rename ${bin_file} aside (still locked? close MCP clients and re-run)"
+          rm -f "${INSTALL_DIR}/${bin_file}.old-${ts}" 2>/dev/null || true
+        fi
+        # Sweep leftover asides (best-effort; locked ones survive to next install sweep).
+        for aside in "${INSTALL_DIR}/${bin_file}".old-*; do
+          [ -e "$aside" ] || continue
+          rm -f "$aside" 2>/dev/null || true
+        done
+        ;;
+      *)
+        rm -f "${INSTALL_DIR}/${bin_file}"
+        ;;
+    esac
   fi
 
   case ":$PATH:" in

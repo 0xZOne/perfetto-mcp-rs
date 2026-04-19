@@ -41,9 +41,30 @@ irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.ps1 | 
 Code 和/或 Codex，也会顺手自动注册。Claude Code 重启后生效，Codex 则开一个
 新 session 就能看到。
 
+**Claude scope**：默认注册 `--scope user`（任意目录可见）。如果想装成
+项目本地（`local` / `project` scope），设 `SCOPE=local` 并**从目标项目目录**
+运行脚本：
+
+```sh
+SCOPE=local bash -c 'curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh'
+```
+
+PowerShell 等价：`$env:SCOPE = 'local'; irm ... | iex`。Codex 没有 scope
+概念，会忽略这个变量。
+
 支持平台：linux amd64/arm64、macOS amd64/arm64、Windows amd64。
 不想跑脚本的话，直接去 [releases 页面](https://github.com/0xZOne/perfetto-mcp-rs/releases)
-下对应平台的二进制也行。
+下对应平台的二进制。Release 资产名是 `perfetto-mcp-rs-<platform>`（例如
+`perfetto-mcp-rs-linux-amd64`），下载后 **Unix 上必须先 `chmod +x`**（子命令
+会拒绝无执行位的路径，防止写入无法启动的 MCP 条目）。示例：
+
+```sh
+# Linux amd64 示例 —— 其它平台替换资产名。
+curl -fsSL -o perfetto-mcp-rs \
+  https://github.com/0xZOne/perfetto-mcp-rs/releases/latest/download/perfetto-mcp-rs-linux-amd64
+chmod +x perfetto-mcp-rs
+./perfetto-mcp-rs install --scope user --binary-path "$PWD/perfetto-mcp-rs"
+```
 
 ## 升级
 
@@ -74,6 +95,18 @@ curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninsta
 ```powershell
 irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.ps1 | iex
 ```
+
+**Scoped 安装（local / project）**：Claude 的 local/project 注册按项目目录索引，
+所以卸载必须用同一个 `SCOPE` 并 **从原项目目录运行**。遗漏这步会导致 wrapper
+删了 binary + cache，但 Claude 的 scoped 注册条目还留着：
+
+```sh
+# 先前在 ~/work/foo 里跑过 `SCOPE=local bash install.sh`？那就：
+cd ~/work/foo
+SCOPE=local bash -c 'curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.sh | sh'
+```
+
+PowerShell 等价：`cd <原项目目录>; $env:SCOPE = 'local'; irm ... | iex`。
 
 `$INSTALL_DIR`（默认 `~/.local/bin`）**不会**自动从 PATH 里清掉：
 

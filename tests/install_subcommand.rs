@@ -112,6 +112,27 @@ impl Harness {
         fs::create_dir_all(&versioned).unwrap();
         fs::write(versioned.join("trace_processor_shell"), b"fake").unwrap();
     }
+
+    /// Create a placeholder file suitable for `--binary-path`. The binary
+    /// validates the path exists + is a regular file before registering
+    /// (see `run_install` in src/install.rs), so tests that pass a
+    /// `--binary-path` must point at something real. The `.to_string()`
+    /// form is what the call-log fixture records, so assertions using
+    /// this path need to interpolate it instead of hard-coding
+    /// `/fake/bin/perfetto-mcp-rs`.
+    fn fake_binary_path(&self) -> String {
+        let p = self.state_dir.join("fake-perfetto-mcp-rs");
+        if !p.exists() {
+            fs::write(&p, b"#!/bin/false\n").unwrap();
+            // Mark executable — run_install refuses 0644 binaries (a real
+            // failure mode for browser-downloaded releases on Unix).
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&p).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&p, perms).unwrap();
+        }
+        p.to_str().unwrap().to_owned()
+    }
 }
 
 fn assert_success(out: &Output, ctx: &str) {
@@ -143,25 +164,20 @@ fn assert_failure(out: &Output, ctx: &str) {
 #[test]
 fn install_from_clean_state_always_remove_then_add() {
     let h = Harness::new();
+    let bin = h.fake_binary_path();
     // Fake `mcp remove` on empty state returns 0 with no stderr (see fixture);
     // binary should proceed to add. Production: Claude returns non-zero + "not
     // found" stderr and gets classified benign.
-    let out = h.run(&[
-        "install",
-        "--scope",
-        "user",
-        "--binary-path",
-        "/fake/bin/perfetto-mcp-rs",
-    ]);
+    let out = h.run(&["install", "--scope", "user", "--binary-path", &bin]);
     assert_success(&out, "install should succeed on clean state");
 
     assert_eq!(
         h.recorded_calls(),
         vec![
             "claude|mcp remove perfetto-mcp-rs --scope user".to_string(),
-            "claude|mcp add perfetto-mcp-rs --scope user /fake/bin/perfetto-mcp-rs".to_string(),
+            format!("claude|mcp add perfetto-mcp-rs --scope user {bin}"),
             "codex|mcp remove perfetto-mcp-rs".to_string(),
-            "codex|mcp add perfetto-mcp-rs -- /fake/bin/perfetto-mcp-rs".to_string(),
+            format!("codex|mcp add perfetto-mcp-rs -- {bin}"),
         ],
         "no mcp list should appear in the call sequence",
     );
@@ -174,26 +190,20 @@ fn install_from_clean_state_always_remove_then_add() {
 #[test]
 fn install_with_existing_entry_removes_then_adds() {
     let h = Harness::new();
-    // Pre-populate fake state: both CLIs have the entry.
+    let bin = h.fake_binary_path();
     fs::write(h.state_dir.join("claude.registered"), "seed\n").unwrap();
     fs::write(h.state_dir.join("codex.registered"), "seed\n").unwrap();
 
-    let out = h.run(&[
-        "install",
-        "--scope",
-        "user",
-        "--binary-path",
-        "/fake/bin/perfetto-mcp-rs",
-    ]);
+    let out = h.run(&["install", "--scope", "user", "--binary-path", &bin]);
     assert_success(&out, "install over existing entry should succeed");
 
     assert_eq!(
         h.recorded_calls(),
         vec![
             "claude|mcp remove perfetto-mcp-rs --scope user".to_string(),
-            "claude|mcp add perfetto-mcp-rs --scope user /fake/bin/perfetto-mcp-rs".to_string(),
+            format!("claude|mcp add perfetto-mcp-rs --scope user {bin}"),
             "codex|mcp remove perfetto-mcp-rs".to_string(),
-            "codex|mcp add perfetto-mcp-rs -- /fake/bin/perfetto-mcp-rs".to_string(),
+            format!("codex|mcp add perfetto-mcp-rs -- {bin}"),
         ],
     );
 }
@@ -207,13 +217,8 @@ fn install_with_existing_entry_removes_then_adds() {
 #[test]
 fn neither_install_nor_uninstall_invokes_mcp_list() {
     let h = Harness::new();
-    let _ = h.run(&[
-        "install",
-        "--scope",
-        "user",
-        "--binary-path",
-        "/fake/bin/perfetto-mcp-rs",
-    ]);
+    let bin = h.fake_binary_path();
+    let _ = h.run(&["install", "--scope", "user", "--binary-path", &bin]);
     let _ = h.run(&["uninstall", "--scope", "user", "--keep-cache"]);
     let calls = h.recorded_calls();
     assert!(
@@ -229,16 +234,11 @@ fn neither_install_nor_uninstall_invokes_mcp_list() {
 #[test]
 fn install_fails_when_existing_user_scope_remove_fails() {
     let h = Harness::new();
+    let bin = h.fake_binary_path();
     fs::write(h.state_dir.join("claude.registered"), "seed\n").unwrap();
 
     let out = h.run_with_extra_env(
-        &[
-            "install",
-            "--scope",
-            "user",
-            "--binary-path",
-            "/fake/bin/perfetto-mcp-rs",
-        ],
+        &["install", "--scope", "user", "--binary-path", &bin],
         &[
             ("FAKE_CLAUDE_REMOVE_EXIT_CODE", "17"),
             ("FAKE_CLAUDE_REMOVE_STDERR", "remove blew up"),
@@ -271,12 +271,8 @@ fn install_fails_when_existing_user_scope_remove_fails() {
 #[test]
 fn install_skip_codex_never_invokes_codex() {
     let h = Harness::new();
-    let out = h.run(&[
-        "install",
-        "--skip-codex",
-        "--binary-path",
-        "/fake/bin/perfetto-mcp-rs",
-    ]);
+    let bin = h.fake_binary_path();
+    let out = h.run(&["install", "--skip-codex", "--binary-path", &bin]);
     assert_success(&out, "install --skip-codex should succeed");
     for call in h.recorded_calls() {
         assert!(
@@ -292,14 +288,9 @@ fn install_skip_codex_never_invokes_codex() {
 #[test]
 fn install_aggregate_failure_surfaces_stderr() {
     let h = Harness::new();
+    let bin = h.fake_binary_path();
     let out = h.run_with_extra_env(
-        &[
-            "install",
-            "--scope",
-            "user",
-            "--binary-path",
-            "/fake/bin/perfetto-mcp-rs",
-        ],
+        &["install", "--scope", "user", "--binary-path", &bin],
         &[
             ("FAKE_CLAUDE_ADD_EXIT_CODE", "17"),
             ("FAKE_CLAUDE_ADD_STDERR", "claude add exploded"),
@@ -319,14 +310,9 @@ fn install_aggregate_failure_surfaces_stderr() {
 #[test]
 fn install_scope_local_failure_has_project_hint() {
     let h = Harness::new();
+    let bin = h.fake_binary_path();
     let out = h.run_with_extra_env(
-        &[
-            "install",
-            "--scope",
-            "local",
-            "--binary-path",
-            "/fake/bin/perfetto-mcp-rs",
-        ],
+        &["install", "--scope", "local", "--binary-path", &bin],
         &[
             ("FAKE_CLAUDE_ADD_EXIT_CODE", "17"),
             ("FAKE_CLAUDE_ADD_STDERR", "no project dir"),
@@ -449,14 +435,9 @@ fn install_cli_missing_skips_gracefully() {
     let fake_empty = tmp.path().to_path_buf();
 
     let h = Harness::new();
+    let bin = h.fake_binary_path();
     let out = Command::new(BIN)
-        .args([
-            "install",
-            "--scope",
-            "user",
-            "--binary-path",
-            "/fake/bin/perfetto-mcp-rs",
-        ])
+        .args(["install", "--scope", "user", "--binary-path", &bin])
         .env_clear()
         .env("PATH", fake_empty.to_str().unwrap())
         .env("HOME", &h.home)
@@ -492,6 +473,7 @@ fn install_cli_missing_skips_gracefully() {
 #[test]
 fn install_scope_local_real_remove_error_is_fatal_before_add() {
     let h = Harness::new();
+    let bin = h.fake_binary_path();
     // Seed list so register_claude sees pre_registered=true and attempts remove.
     fs::write(h.state_dir.join("claude.registered"), "seed\n").unwrap();
 
@@ -502,7 +484,7 @@ fn install_scope_local_real_remove_error_is_fatal_before_add() {
             "local",
             "--skip-codex",
             "--binary-path",
-            "/fake/bin/perfetto-mcp-rs",
+            &bin,
         ],
         &[
             ("FAKE_CLAUDE_REMOVE_EXIT_CODE", "2"),
@@ -551,6 +533,7 @@ fn install_scope_local_real_remove_error_is_fatal_before_add() {
 #[test]
 fn install_scope_local_not_found_remove_is_tolerated() {
     let h = Harness::new();
+    let bin = h.fake_binary_path();
     // list shows entry (probably a different-scope user/project entry visible
     // from this CWD) — pre_registered true → attempts remove.
     fs::write(h.state_dir.join("claude.registered"), "seed\n").unwrap();
@@ -562,7 +545,7 @@ fn install_scope_local_not_found_remove_is_tolerated() {
             "local",
             "--skip-codex",
             "--binary-path",
-            "/fake/bin/perfetto-mcp-rs",
+            &bin,
         ],
         &[
             ("FAKE_CLAUDE_REMOVE_EXIT_CODE", "1"),
@@ -586,11 +569,15 @@ fn install_scope_local_not_found_remove_is_tolerated() {
 }
 
 // ---------------------------------------------------------------------------
-// deregister_claude with --scope local + remove reports "not found" → Skipped
-// with project-directory hint (benign scope/CWD mismatch).
+// P1 regression (Codex latest): deregister_claude with --scope local + remove
+// reports "not found" → **Failed** (not Skipped). The shell wrapper treats
+// Skipped as "safe to delete binary", which with a Local/Project scope would
+// silently orphan the real registration if the user is in the wrong CWD.
+// Failed makes the wrapper preserve the binary so the user can retry from
+// the right directory.
 // ---------------------------------------------------------------------------
 #[test]
-fn uninstall_scope_local_not_found_is_skipped_with_hint() {
+fn uninstall_scope_local_not_found_is_fatal() {
     let h = Harness::new();
     // Don't seed — list will be empty (mirrors "wrong CWD" in production).
     let out = h.run_with_extra_env(
@@ -610,9 +597,10 @@ fn uninstall_scope_local_not_found_is_skipped_with_hint() {
             ),
         ],
     );
-    assert_success(
+    assert_failure(
         &out,
-        "scope=local 'not found' should be benign Skipped, not Failed",
+        "scope=local 'not found' MUST be Failed — Skipped would let the wrapper \
+         delete the binary while a real scoped registration survives elsewhere",
     );
     let combined = format!(
         "{}\n{}",
@@ -620,8 +608,9 @@ fn uninstall_scope_local_not_found_is_skipped_with_hint() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        combined.contains("not registered in this project directory"),
-        "expected project-directory hint: {combined}"
+        combined.contains("project directory used at install time")
+            || combined.contains("Keeping binary in place"),
+        "expected wrong-CWD-or-already-removed hint: {combined}"
     );
 }
 
@@ -770,6 +759,7 @@ fn uninstall_mixed_corruption_and_not_found_is_fatal() {
 #[test]
 fn install_scope_user_tolerates_visible_non_user_entry() {
     let h = Harness::new();
+    let bin = h.fake_binary_path();
     // Seed list so pre_registered=true (mirrors "there's a local/project entry
     // visible from this CWD").
     fs::write(h.state_dir.join("claude.registered"), "seed\n").unwrap();
@@ -780,7 +770,7 @@ fn install_scope_user_tolerates_visible_non_user_entry() {
             "user",
             "--skip-codex",
             "--binary-path",
-            "/fake/bin/perfetto-mcp-rs",
+            &bin,
         ],
         &[
             ("FAKE_CLAUDE_REMOVE_EXIT_CODE", "1"),
@@ -853,6 +843,7 @@ fn uninstall_scope_user_tolerates_not_found_from_non_user_entry() {
 #[test]
 fn install_survives_malformed_server_env_vars() {
     let h = Harness::new();
+    let bin = h.fake_binary_path();
     let out = h.run_with_extra_env(
         &[
             "install",
@@ -860,7 +851,7 @@ fn install_survives_malformed_server_env_vars() {
             "user",
             "--skip-codex",
             "--binary-path",
-            "/fake/bin/perfetto-mcp-rs",
+            &bin,
         ],
         &[
             ("PERFETTO_STARTUP_TIMEOUT_MS", "not-a-number"),
@@ -904,13 +895,38 @@ fn uninstall_survives_malformed_server_env_vars() {
 #[test]
 fn install_registers_absolute_path_from_relative_input() {
     let h = Harness::new();
-    let out = h.run(&[
-        "install",
-        "--scope",
-        "user",
-        "--binary-path",
-        "./relative-fake-perfetto-mcp-rs",
-    ]);
+    // Pick a tempdir as the binary's CWD, pre-create the relative target
+    // there. `std::path::absolute` resolves `./name` against CWD, so the
+    // registered path becomes `<tempdir>/name` (regardless of the test
+    // runner's CWD).
+    let work = tempfile::tempdir().unwrap();
+    let rel_name = "relative-fake-perfetto-mcp-rs";
+    let rel_path = work.path().join(rel_name);
+    fs::write(&rel_path, b"#!/bin/false\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(&rel_path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&rel_path, perms).unwrap();
+
+    let fixtures = fixtures_dir();
+    let out = Command::new(BIN)
+        .current_dir(work.path())
+        .args([
+            "install",
+            "--scope",
+            "user",
+            "--binary-path",
+            &format!("./{rel_name}"),
+        ])
+        .env_clear()
+        .env("PATH", fixtures.to_str().unwrap())
+        .env("FAKE_STATE_DIR", &h.state_dir)
+        .env("FAKE_RECORD_FILE", &h.record_file)
+        .env("HOME", &h.home)
+        .env("XDG_DATA_HOME", &h.xdg_data)
+        .env("LOCALAPPDATA", &h.local_appdata)
+        .output()
+        .unwrap();
     assert_success(
         &out,
         "install with relative --binary-path should still succeed",
@@ -940,9 +956,124 @@ fn install_registers_absolute_path_from_relative_input() {
         registered_path
             .file_name()
             .and_then(|f| f.to_str())
-            .is_some_and(|f| f == "relative-fake-perfetto-mcp-rs"),
+            .is_some_and(|f| f == rel_name),
         "registered path file_name mismatch: {}",
         registered_path.display()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P2 regression (Codex latest): `install` without `--binary-path` must FAIL
+// fast. We deliberately do NOT fall back to `current_exe()`: on Linux that
+// reads `/proc/self/exe`, which is the symlink-resolved target, so a
+// versioned install (`~/bin/foo -> ~/opt/foo-0.8.0`) would register the
+// 0.8.0 path and break future symlink re-point upgrades.
+// ---------------------------------------------------------------------------
+#[test]
+fn install_requires_binary_path() {
+    let h = Harness::new();
+    let out = h.run(&["install", "--scope", "user"]);
+    assert_failure(&out, "install must refuse to run without --binary-path");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // clap's own "required argument missing" message mentions the flag name.
+    assert!(
+        stderr.contains("--binary-path"),
+        "clap should mention the missing flag: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P2 regression (Codex latest): install --binary-path pointing at a
+// non-existent file must FAIL fast, NOT silently write a dead MCP entry.
+// The binary validates existence + regular-file before calling `mcp add`.
+// ---------------------------------------------------------------------------
+#[test]
+fn install_rejects_nonexistent_binary_path() {
+    let h = Harness::new();
+    let out = h.run(&[
+        "install",
+        "--scope",
+        "user",
+        "--binary-path",
+        "/definitely/does/not/exist/perfetto-mcp-rs",
+    ]);
+    assert_failure(
+        &out,
+        "install must refuse a non-existent binary_path — no dead MCP entry",
+    );
+    let calls = h.recorded_calls();
+    assert!(
+        calls.is_empty() || !calls.iter().any(|c| c.contains("mcp add")),
+        "no `mcp add` should be recorded when path check fails: {calls:?}"
+    );
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("not accessible") || combined.contains("broken MCP entry"),
+        "expected actionable error message: {combined}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P2 regression (Codex latest): --binary-path pointing at a 0644 file (e.g.
+// browser-downloaded release without chmod +x) must fail. Otherwise install
+// succeeds but Claude/Codex can't spawn the server later.
+// ---------------------------------------------------------------------------
+#[test]
+fn install_rejects_non_executable_binary_path() {
+    let h = Harness::new();
+    let p = h.state_dir.join("non-exec-fake-perfetto-mcp-rs");
+    fs::write(&p, b"#!/bin/false\n").unwrap();
+    // Leave mode at default (post-umask 0644) — the bit we want to assert on.
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(&p).unwrap().permissions();
+    perms.set_mode(0o644);
+    fs::set_permissions(&p, perms).unwrap();
+
+    let out = h.run(&[
+        "install",
+        "--scope",
+        "user",
+        "--binary-path",
+        p.to_str().unwrap(),
+    ]);
+    assert_failure(
+        &out,
+        "install must refuse a non-executable binary — would write a dead MCP entry",
+    );
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("not executable") && combined.contains("chmod +x"),
+        "expected chmod hint: {combined}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P2 regression: --binary-path pointing at a directory (not a file) must
+// fail. Prevents registering directories as if they were executables.
+// ---------------------------------------------------------------------------
+#[test]
+fn install_rejects_directory_binary_path() {
+    let h = Harness::new();
+    // State dir is a valid directory we know exists.
+    let dir = h.state_dir.to_str().unwrap().to_owned();
+    let out = h.run(&["install", "--scope", "user", "--binary-path", &dir]);
+    assert_failure(&out, "install must refuse a directory as binary_path");
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("not a regular file"),
+        "expected regular-file hint: {combined}"
     );
 }
 
