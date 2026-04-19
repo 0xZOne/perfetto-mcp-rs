@@ -67,7 +67,12 @@ function Uninstall-PerfettoMcp {
 
         if ($helpExit -eq 0) {
             if ($helpOutput -match '(?m)^\s+uninstall\b') {
-                _invokeNative { & $dest uninstall --scope $scope } | Out-Null
+                # Don't `| Out-Null` here — the binary prints step-by-step
+                # outcomes (`==> Claude: deregistered...` etc.) on stdout,
+                # and we want them on the user's console. _invokeNative
+                # only captures $LASTEXITCODE via the EAP dance; its
+                # return value is the passthrough stdout stream.
+                _invokeNative { & $dest uninstall --scope $scope }
                 $uninstallExit = $LASTEXITCODE
 
                 if ($uninstallExit -eq 0) {

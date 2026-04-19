@@ -2,6 +2,11 @@
 
 ## perfetto-mcp-rs 0.x Changes
 
+### [0.8.2](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.8.2) (April 19, 2026)
+
+- **Windows fix**: `uninstall` no longer fails hard when the cache directory can't be removed due to locked files (a running MCP client holding `trace_processor_shell.exe` open). `clean_cache` now classifies `ErrorKind::PermissionDenied` as Skipped-with-guidance ("close Claude Code / Codex and retry, or delete manually") instead of Failed. Claude/Codex deregistration — the meaningful work — already succeeded at that point, so the wrapper correctly proceeds to remove the binary. Cache leftovers are harmless (they just re-populate on the next install).
+- **Windows fix**: `uninstall.ps1` no longer discards the binary's stdout. The v0.8.1 PR accidentally added `| Out-Null` around the `_invokeNative { & $dest uninstall ... }` call as part of an EAP-dance refactor, which ate the step-by-step progress output (`==> Claude: deregistered...`, `==> Codex: deregistered...`, etc.). Only stderr was visible, making users think only errors happened. Dropping `| Out-Null` restores the flow; `_invokeNative` still manages `$ErrorActionPreference` and `$LASTEXITCODE` correctly. Surfaced by a real Windows PowerShell uninstall run.
+
 ### [0.8.1](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.8.1) (April 19, 2026)
 
 - **Windows fix**: `install` subcommand now correctly invokes `codex` (and any other CLI) when the installed form is a `.cmd`/`.bat` shim instead of a native `.exe`. npm-installed CLIs like OpenAI's Codex land as `codex.cmd` on Windows; v0.8.0's `Command::new("codex")` failed with `program not found` because `CreateProcessW` can't exec batch files directly. v0.8.1 resolves the path through `which::which` (applies PATHEXT consistently) and on Windows wraps `.cmd`/`.bat` shims through `cmd /c`. Surfaced by a real Windows PowerShell install run where Claude registered but Codex failed.

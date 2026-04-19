@@ -379,6 +379,20 @@ fn clean_cache() -> Outcome {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             Outcome::Done(format!("cache {} already absent", root.display()))
         }
+        // PermissionDenied / "Access is denied" typically means another
+        // MCP client (Claude Code, Codex) has a live perfetto-mcp-rs
+        // instance with trace_processor_shell still mapped — we can't
+        // unlink it from this process. Don't escalate to Failed: Claude/
+        // Codex deregistration already succeeded above, so the binary
+        // SHOULD be removable. Cache leftovers are harmless (the dir will
+        // just re-populate on the next install). Tell the user how to
+        // finish the cleanup manually if they want it gone.
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Outcome::Skipped(format!(
+            "could not remove cache {} ({e}). On Windows this usually means an \
+             MCP client still has trace_processor_shell open; close Claude Code / \
+             Codex and re-run uninstall, or delete the directory manually.",
+            root.display()
+        )),
         Err(e) => Outcome::Failed(format!("remove_dir_all({}) failed: {e}", root.display())),
     }
 }
