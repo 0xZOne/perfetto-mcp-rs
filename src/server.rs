@@ -781,7 +781,8 @@ async fn ensure_chrome_trace(
         return Err(format!(
             "{tool_label} requires a Chrome-family trace, but no \
              `chrome.process_type` track-descriptor args were found in this \
-             trace. Use execute_sql for a different trace type."
+             trace. Call `list_stdlib_modules` to discover modules that fit \
+             this trace, then query via execute_sql."
         ));
     }
     Ok(())
@@ -1238,6 +1239,7 @@ mod tests {
             let err = r.expect_err("chrome_scroll_jank_summary: preflight must reject");
             assert!(err.contains("Chrome scroll jank summary"), "got: {err}");
             assert!(err.contains("Chrome-family trace"), "got: {err}");
+            assert!(err.contains("list_stdlib_modules"), "got: {err}");
 
             let r = server.chrome_page_load_summary(mk_params()).await;
             let err = r.expect_err("chrome_page_load_summary: preflight must reject");
