@@ -2,6 +2,10 @@
 
 ## perfetto-mcp-rs 0.x Changes
 
+### [0.8.3](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.8.3) (April 20, 2026)
+
+- **Agent-guidance fix**: the `chrome_*` preflight error on non-Chrome traces now points the agent to the recovery tool instead of dead-ending. When a trace lacks `chrome.process_type` track-descriptor args, the error message appended `Call list_stdlib_modules to discover modules that fit this trace, then query via execute_sql.` Prior wording only said "use execute_sql for a different trace type", and observation samples (v0.7 #2, v0.8 #1) consistently showed agents falling back to `list_processes` + hand-rolled 4-table JOINs (`slice JOIN thread_track JOIN thread JOIN process`) instead of the stdlib path. v0.8 sample #2 on the same Quark/sina trace — with this fix deployed — recorded 3/3 `execute_sql` calls using `INCLUDE PERFETTO MODULE` (`chrome.page_loads`, `chrome.tasks`), 0 raw `slice` scans. All five `chrome_*` handlers share the same `ensure_chrome_trace` preflight (`src/server.rs`), so the redirect applies uniformly. The integration test `all_chrome_handlers_reject_non_chrome_via_preflight` now asserts the `list_stdlib_modules` substring in every handler's error (previously asserted only in the first), so future refactors can't silently delete the redirect for any single tool.
+
 ### [0.8.2](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.8.2) (April 19, 2026)
 
 - **Windows fix**: `uninstall` no longer fails hard when the cache directory can't be removed due to locked files (a running MCP client holding `trace_processor_shell.exe` open). `clean_cache` now classifies `ErrorKind::PermissionDenied` as Skipped-with-guidance ("close Claude Code / Codex and retry, or delete manually") instead of Failed. Claude/Codex deregistration — the meaningful work — already succeeded at that point, so the wrapper correctly proceeds to remove the binary. Cache leftovers are harmless (they just re-populate on the next install).

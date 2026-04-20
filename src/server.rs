@@ -1245,16 +1245,19 @@ mod tests {
             let err = r.expect_err("chrome_page_load_summary: preflight must reject");
             assert!(err.contains("Chrome page load summary"), "got: {err}");
             assert!(err.contains("Chrome-family trace"), "got: {err}");
+            assert!(err.contains("list_stdlib_modules"), "got: {err}");
 
             let r = server.chrome_main_thread_hotspots(mk_params()).await;
             let err = r.expect_err("chrome_main_thread_hotspots: preflight must reject");
             assert!(err.contains("Chrome main-thread hotspots"), "got: {err}");
             assert!(err.contains("Chrome-family trace"), "got: {err}");
+            assert!(err.contains("list_stdlib_modules"), "got: {err}");
 
             let r = server.chrome_startup_summary(mk_params()).await;
             let err = r.expect_err("chrome_startup_summary: preflight must reject");
             assert!(err.contains("Chrome startup summary"), "got: {err}");
             assert!(err.contains("Chrome-family trace"), "got: {err}");
+            assert!(err.contains("list_stdlib_modules"), "got: {err}");
 
             let r = server.chrome_web_content_interactions(mk_params()).await;
             let err = r.expect_err("chrome_web_content_interactions: preflight must reject");
@@ -1263,6 +1266,7 @@ mod tests {
                 "got: {err}"
             );
             assert!(err.contains("Chrome-family trace"), "got: {err}");
+            assert!(err.contains("list_stdlib_modules"), "got: {err}");
         });
     }
 }
