@@ -13,8 +13,11 @@
 //!   exceed the 16 ms threshold the tool filters by, so main_thread_hotspots
 //!   falls back to a weak assertion.
 //! - Neither fixture has chrome_startups or chrome_web_content_interactions
-//!   data, so those two tools also use weak assertions. Upgrade to strong
-//!   assertions when fixtures with the relevant event types are added.
+//!   *rows*, so those two tools cannot assert on row content. Instead they
+//!   assert on (a) the stdlib view schema via PRAGMA table_info — every
+//!   column referenced by the tool SQL must exist — and (b) the view is
+//!   reachable with cardinality 0, separating "fixture has no data" from
+//!   "module silently failed to load".
 
 use std::path::Path;
 
@@ -131,10 +134,14 @@ fn e2e_chrome_main_thread_hotspots_against_fixture() {
 }
 
 #[test]
-fn e2e_chrome_startup_summary_sql_runs_cleanly() {
-    // Neither fixture has chrome_startups data. Weak assertion: SQL executes
-    // without MissingTable / MissingModule / schema error. Upgrade to strong
-    // assertion when a startup-specific fixture is added.
+fn e2e_chrome_startup_summary_against_fixture() {
+    // Neither bundled fixture captures chrome_startups rows, so we cannot
+    // assert on row content. Instead we lock down three independent failure
+    // modes any one of which would silently break the tool today:
+    //   1. The chrome.startups module no longer loads (MissingModule).
+    //   2. The chrome_startups view drops or renames a column the tool SQL
+    //      depends on (PRAGMA table_info schema check below).
+    //   3. The tool SQL itself stops parsing or executing against the view.
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -145,28 +152,74 @@ fn e2e_chrome_startup_summary_sql_runs_cleanly() {
         let trace = Path::new("tests/fixtures/scroll_jank.pftrace");
 
         let client = manager.get_client(trace).await.expect("spawn tp_shell");
+
+        let schema_rows = client
+            .query(
+                "INCLUDE PERFETTO MODULE chrome.startups; \
+                 PRAGMA table_info('chrome_startups')",
+            )
+            .await
+            .expect("chrome.startups module must load and chrome_startups view must exist");
+        assert!(
+            !schema_rows.is_empty(),
+            "PRAGMA table_info('chrome_startups') returned no columns — \
+             stdlib view is missing or renamed",
+        );
+        let columns: std::collections::HashSet<String> = schema_rows
+            .iter()
+            .filter_map(|row| row.get("name").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+        for required in [
+            "id",
+            "name",
+            "launch_cause",
+            "startup_begin_ts",
+            "first_visible_content_ts",
+            "browser_upid",
+        ] {
+            assert!(
+                columns.contains(required),
+                "chrome_startups view missing required column `{required}`; \
+                 actual columns = {columns:?}",
+            );
+        }
+
+        let count_rows = client
+            .query(
+                "INCLUDE PERFETTO MODULE chrome.startups; \
+                 SELECT COUNT(*) AS n FROM chrome_startups",
+            )
+            .await
+            .expect("chrome_startups view must be queryable");
+        let count = count_rows
+            .first()
+            .and_then(|r| r["n"].as_i64())
+            .expect("COUNT(*) must return one integer row");
+        assert_eq!(
+            count, 0,
+            "scroll_jank.pftrace is expected to have 0 chrome_startups rows; \
+             got {count}. If this fixture now contains startup data, upgrade \
+             the test to assert on row content instead.",
+        );
+
         let rows = client
             .query(CHROME_STARTUP_SUMMARY_SQL)
             .await
             .expect("chrome startup SQL must resolve against the chrome.startups module");
-
-        // Row count not asserted — fixture has no startup data. Field shape
-        // verified only when rows exist.
-        for row in &rows {
-            assert!(row.get("name").is_some(), "row missing name: {row}");
-            assert!(
-                row.get("startup_duration_ms").is_some(),
-                "row missing startup_duration_ms: {row}",
-            );
-        }
+        assert!(
+            rows.is_empty(),
+            "tool SQL must return 0 rows when the underlying view has 0 rows; got {} rows",
+            rows.len(),
+        );
     });
 }
 
 #[test]
-fn e2e_chrome_web_content_interactions_sql_runs_cleanly() {
-    // Neither fixture has web content interaction data captured. Weak
-    // assertion: SQL executes cleanly. Upgrade when an interaction-specific
-    // fixture is added.
+fn e2e_chrome_web_content_interactions_against_fixture() {
+    // Neither bundled fixture captures chrome_web_content_interactions rows,
+    // so we cannot assert on row content. Same three-layer guard as the
+    // startup test: module loads, view schema matches the columns the tool
+    // SQL depends on, and the tool SQL itself parses and executes.
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -177,18 +230,59 @@ fn e2e_chrome_web_content_interactions_sql_runs_cleanly() {
         let trace = Path::new("tests/fixtures/scroll_jank.pftrace");
 
         let client = manager.get_client(trace).await.expect("spawn tp_shell");
+
+        let schema_rows = client
+            .query(
+                "INCLUDE PERFETTO MODULE chrome.web_content_interactions; \
+                 PRAGMA table_info('chrome_web_content_interactions')",
+            )
+            .await
+            .expect("chrome.web_content_interactions module must load and view must exist");
+        assert!(
+            !schema_rows.is_empty(),
+            "PRAGMA table_info('chrome_web_content_interactions') returned no \
+             columns — stdlib view is missing or renamed",
+        );
+        let columns: std::collections::HashSet<String> = schema_rows
+            .iter()
+            .filter_map(|row| row.get("name").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+        for required in ["id", "ts", "dur", "interaction_type", "renderer_upid"] {
+            assert!(
+                columns.contains(required),
+                "chrome_web_content_interactions view missing required column \
+                 `{required}`; actual columns = {columns:?}",
+            );
+        }
+
+        let count_rows = client
+            .query(
+                "INCLUDE PERFETTO MODULE chrome.web_content_interactions; \
+                 SELECT COUNT(*) AS n FROM chrome_web_content_interactions",
+            )
+            .await
+            .expect("chrome_web_content_interactions view must be queryable");
+        let count = count_rows
+            .first()
+            .and_then(|r| r["n"].as_i64())
+            .expect("COUNT(*) must return one integer row");
+        assert_eq!(
+            count, 0,
+            "scroll_jank.pftrace is expected to have 0 \
+             chrome_web_content_interactions rows; got {count}. If this fixture \
+             now contains interaction data, upgrade the test to assert on row \
+             content instead.",
+        );
+
         let rows = client
             .query(CHROME_WEB_CONTENT_INTERACTIONS_SQL)
             .await
             .expect("chrome.web_content_interactions module must resolve");
-
-        for row in &rows {
-            assert!(
-                row.get("interaction_type").is_some(),
-                "row missing interaction_type: {row}",
-            );
-            assert!(row.get("dur_ms").is_some(), "row missing dur_ms: {row}");
-        }
+        assert!(
+            rows.is_empty(),
+            "tool SQL must return 0 rows when the underlying view has 0 rows; got {} rows",
+            rows.len(),
+        );
     });
 }
 
