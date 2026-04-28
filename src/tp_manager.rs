@@ -16,7 +16,7 @@ use crate::download::DownloadConfig;
 use crate::proto::StatusResult;
 use crate::tp_client::TraceProcessorClient;
 
-const STDERR_TAIL_CAPACITY: usize = 50;
+const STDERR_TAIL_CAPACITY: usize = 100;
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const STATUS_FALLBACK_DELAY: Duration = Duration::from_millis(500);
 const STATUS_FALLBACK_STABILITY: Duration = Duration::from_millis(300);
@@ -100,8 +100,7 @@ impl TraceProcessorInstance {
             .stdout
             .take()
             .context("failed to capture trace_processor_shell stdout")?;
-        let (mut startup_rx, stderr_tail) = spawn_stderr_drain(stderr, port);
-        spawn_stdout_drain(stdout, port, Arc::clone(&stderr_tail));
+        let (mut startup_rx, stderr_tail) = spawn_output_drains(stderr, stdout, port);
         let client = TraceProcessorClient::new(port, config.request_timeout);
 
         let mut instance = Self {
@@ -495,22 +494,50 @@ fn preflight_port_free(port: u16) -> bool {
     std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
-fn spawn_stderr_drain(
+fn spawn_output_drains(
     stderr: tokio::process::ChildStderr,
+    stdout: tokio::process::ChildStdout,
     port: u16,
 ) -> (watch::Receiver<StartupState>, SharedStderrTail) {
     let (startup_tx, startup_rx) = watch::channel(StartupState::Waiting);
-    let stderr_tail = Arc::new(StdMutex::new(std::collections::VecDeque::with_capacity(
+    let tail = Arc::new(StdMutex::new(std::collections::VecDeque::with_capacity(
         STDERR_TAIL_CAPACITY,
     )));
-    let stderr_tail_task = Arc::clone(&stderr_tail);
+    spawn_output_drain(
+        stderr,
+        port,
+        Arc::clone(&tail),
+        "stderr",
+        "",
+        Some(startup_tx),
+    );
+    spawn_output_drain(stdout, port, Arc::clone(&tail), "stdout", "[stdout] ", None);
+    (startup_rx, tail)
+}
 
+/// Drain one output stream into the shared tail. `line_prefix` is prepended
+/// in stored output (so `format_stderr_tail` can attribute lines back to
+/// stderr vs stdout). `startup_tx` is `Some` only for stderr — stdout never
+/// carries the readiness banner.
+///
+/// Lossy decode keeps the drain alive when trace_processor_shell emits
+/// non-UTF-8 bytes (Windows ANSI codepage error text). ASCII tokens —
+/// errno codes, ports, paths — survive intact, so startup needle matching
+/// and LLM diagnostics keep working on any locale.
+fn spawn_output_drain<R>(
+    reader: R,
+    port: u16,
+    tail: SharedStderrTail,
+    stream_label: &'static str,
+    line_prefix: &'static str,
+    mut startup_tx: Option<watch::Sender<StartupState>>,
+) where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
     tokio::spawn(async move {
         let needles = StartupNeedles::for_port(port);
         let mut startup_state = StartupLogState::default();
-        // Stops parsing once startup resolves.
-        let mut parse_startup = true;
-        let mut reader = BufReader::new(stderr);
+        let mut reader = BufReader::new(reader);
         let mut buf = Vec::with_capacity(256);
 
         loop {
@@ -518,62 +545,33 @@ fn spawn_stderr_drain(
             match reader.read_until(b'\n', &mut buf).await {
                 Ok(0) => break,
                 Ok(_) => {
-                    // Lossy decode keeps the drain alive when trace_processor_shell
-                    // emits non-UTF-8 bytes (e.g. ANSI-codepage error text on
-                    // Windows). Invalid sequences become `�`; ASCII portions
-                    // (errno codes, paths, file sizes, port numbers) survive,
-                    // so startup needle matching and LLM-facing diagnostics keep
-                    // working even on a Chinese-locale Windows shell.
                     let line = decode_output_line(&buf);
-                    tracing::info!("trace_processor_shell[{port}] stderr: {line}");
-                    push_stderr_line(&stderr_tail_task, &line);
+                    tracing::info!("trace_processor_shell[{port}] {stream_label}: {line}");
 
-                    if parse_startup {
+                    if let Some(tx) = startup_tx.as_ref() {
                         if let Some(next_state) =
                             update_startup_state(&mut startup_state, &needles, &line)
                         {
-                            let _ = startup_tx.send(next_state);
-                            parse_startup = false;
+                            let _ = tx.send(next_state);
+                            startup_tx = None;
                         }
                     }
+
+                    let stored = if line_prefix.is_empty() {
+                        line
+                    } else {
+                        format!("{line_prefix}{line}")
+                    };
+                    push_stderr_line(&tail, stored);
                 }
                 Err(err) => {
-                    tracing::warn!("failed reading trace_processor_shell[{port}] stderr: {err}");
-                    push_stderr_line(&stderr_tail_task, &format!("stderr read error: {err}"));
-                    break;
-                }
-            }
-        }
-    });
-
-    (startup_rx, stderr_tail)
-}
-
-/// stdout drain — feeds the same tail as stderr (with `[stdout] ` prefix) so
-/// failures whose root cause is printed to stdout (some Perfetto / fopen paths
-/// surface there) reach `format_stderr_tail` and the LLM. Does not parse
-/// startup needles — those are stderr-only.
-fn spawn_stdout_drain(
-    stdout: tokio::process::ChildStdout,
-    port: u16,
-    stderr_tail: SharedStderrTail,
-) {
-    tokio::spawn(async move {
-        let mut reader = BufReader::new(stdout);
-        let mut buf = Vec::with_capacity(256);
-
-        loop {
-            buf.clear();
-            match reader.read_until(b'\n', &mut buf).await {
-                Ok(0) => break,
-                Ok(_) => {
-                    let line = decode_output_line(&buf);
-                    tracing::info!("trace_processor_shell[{port}] stdout: {line}");
-                    push_stderr_line(&stderr_tail, &format!("[stdout] {line}"));
-                }
-                Err(err) => {
-                    tracing::warn!("failed reading trace_processor_shell[{port}] stdout: {err}");
-                    push_stderr_line(&stderr_tail, &format!("[stdout] read error: {err}"));
+                    tracing::warn!(
+                        "failed reading trace_processor_shell[{port}] {stream_label}: {err}",
+                    );
+                    push_stderr_line(
+                        &tail,
+                        format!("{line_prefix}{stream_label} read error: {err}"),
+                    );
                     break;
                 }
             }
@@ -581,7 +579,6 @@ fn spawn_stdout_drain(
     });
 }
 
-/// Strip a trailing `\n` (and optional preceding `\r`), then lossy-decode.
 fn decode_output_line(buf: &[u8]) -> String {
     let trimmed = match buf.last() {
         Some(b'\n') => {
@@ -691,6 +688,7 @@ pub(crate) fn strip_size_suffix(loaded: &str) -> &str {
 ///
 /// On Unix this is a no-op: argv is byte-exact, and trace_processor reads
 /// paths through the same `OsStr` bytes Tokio uses to spawn.
+#[cfg_attr(not(windows), allow(unused_variables))]
 fn ensure_trace_path_supported(canonical: &Path) -> Result<()> {
     #[cfg(windows)]
     {
@@ -709,17 +707,15 @@ fn ensure_trace_path_supported(canonical: &Path) -> Result<()> {
             );
         }
     }
-    #[cfg(not(windows))]
-    let _ = canonical;
     Ok(())
 }
 
-fn push_stderr_line(stderr_tail: &SharedStderrTail, line: &str) {
+fn push_stderr_line(stderr_tail: &SharedStderrTail, line: String) {
     let mut tail = stderr_tail.lock().expect("stderr tail poisoned");
     if tail.len() == STDERR_TAIL_CAPACITY {
         tail.pop_front();
     }
-    tail.push_back(line.to_owned());
+    tail.push_back(line);
 }
 
 fn format_stderr_tail(stderr_tail: &SharedStderrTail) -> String {
@@ -727,10 +723,14 @@ fn format_stderr_tail(stderr_tail: &SharedStderrTail) -> String {
     if tail.is_empty() {
         String::new()
     } else {
+        let body = tail
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("\n");
         format!(
-            "\noutput tail (stderr + stdout, last {} lines):\n{}",
+            "\noutput tail (stderr + stdout, last {} lines):\n{body}",
             tail.len(),
-            tail.iter().cloned().collect::<Vec<_>>().join("\n")
         )
     }
 }
@@ -989,11 +989,11 @@ mod tests {
         let expected_trace_for_status = expected_trace.clone();
         push_stderr_line(
             &instance.stderr_tail,
-            "[HTTP] Starting HTTP server on 127.0.0.1:19112",
+            "[HTTP] Starting HTTP server on 127.0.0.1:19112".to_owned(),
         );
         push_stderr_line(
             &instance.stderr_tail,
-            "[HTTP] Failed to listen on IPv4 socket: \"127.0.0.1:19112\"",
+            "[HTTP] Failed to listen on IPv4 socket: \"127.0.0.1:19112\"".to_owned(),
         );
         let (_startup_tx, mut startup_rx) = watch::channel(StartupState::Ipv4BindFailed(
             "Failed to listen on IPv4 socket: \"127.0.0.1:19112\"".to_owned(),
@@ -1616,10 +1616,9 @@ mod tests {
 
     #[test]
     fn decode_output_line_replaces_invalid_utf8_with_replacement_char() {
-        // ANSI codepage byte sequence that isn't valid UTF-8 — the kind of
-        // payload Windows trace_processor_shell prints when reporting a
-        // mangled non-ASCII path.
-        let bytes = b"open failed: \xc4\xe3\xba\xc3\n"; // GBK-encoded "你好"
+        // GBK-encoded "你好" — the shape of payload Windows trace_processor_shell
+        // emits via the active ANSI codepage. Must NOT poison the stream.
+        let bytes = b"open failed: \xc4\xe3\xba\xc3\n";
         let decoded = decode_output_line(bytes);
         assert!(
             decoded.starts_with("open failed: "),
@@ -1629,7 +1628,6 @@ mod tests {
             decoded.contains('\u{FFFD}'),
             "invalid bytes must become U+FFFD, got: {decoded:?}",
         );
-        // The drain stays alive — no panic, no error returned.
     }
 
     #[test]
