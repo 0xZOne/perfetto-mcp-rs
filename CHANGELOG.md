@@ -2,6 +2,13 @@
 
 ## perfetto-mcp-rs 0.x Changes
 
+### [0.8.6](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.8.6) (April 28, 2026)
+
+- **Windows non-ASCII paths now load transparently**. `ensure_trace_path_supported` is replaced with `resolve_trace_path_for_shell` which, on Windows + non-ASCII canonical path, calls `GetShortPathNameW` (kernel32.dll, `extern "system"` FFI — no new crate dependency) and substitutes the NTFS-native 8.3 short alias (`低端机traces` → `E4BDB~1`) for the argv passed to `trace_processor_shell.exe`. The cache key remains the canonical path, so two requests for the same trace under different aliases share one instance. Users no longer need to manually copy traces to `C:\traces\`. Internal `refactor: simplify v0.8.5 output drains` (`744837a`) is folded into this release.
+- Fallback chain when 8.3 generation is disabled on the volume (`fsutil 8dot3name query`) or any path component lacks a short alias: returns the v0.8.5 LLM-friendly error, now with three workarounds — copy to ASCII path, re-enable 8.3 names, or pass an existing short name from `dir /x`.
+- 4 new tests in `src/tp_manager.rs`: ASCII pass-through, Unix non-ASCII pass-through (argv is byte-exact on Unix, no rewrite needed), `#[cfg(windows)]` integration test that creates a real `低端机traces/` directory + file in a `tempdir` and asserts the rewritten path is ASCII (skips gracefully if 8.3 generation is disabled on the temp volume), and `#[cfg(windows)]` rejection test for non-existent non-ASCII paths. The Windows tests run automatically in the windows-amd64 release.yml job.
+- Upstream: this is fundamentally a `trace_processor_shell.exe` bug — its `int main(int, char*[])` entry point loses non-ANSI-codepage characters. Chromium's `base::CommandLine::Init` solves it via `GetCommandLineW` + `CommandLineToArgvW`. An issue will be filed at https://github.com/google/perfetto/issues; until upstream fixes the entry point, this client-side rewrite is the lowest-friction path.
+
 ### [0.8.5](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.8.5) (April 28, 2026)
 
 - **Diagnostics fix**: `load_trace` now surfaces actionable error signals when `trace_processor_shell` fails to start, instead of bottoming out at the generic 20s readiness timeout. Three independent leaks plugged in `src/tp_manager.rs`:

@@ -365,10 +365,15 @@ impl TraceProcessorManager {
         let canonical = trace_path
             .canonicalize()
             .with_context(|| format!("trace file not found: {}", trace_path.display()))?;
-        ensure_trace_path_supported(&canonical)?;
+        // Cache key stays canonical so two requests for the same trace
+        // (regardless of which shell-friendly alias we pick) share an
+        // instance. shell_path is what we hand the child process — usually
+        // identical, but on Windows + non-ASCII we may rewrite it to the
+        // 8.3 short name to dodge the ANSI-codepage argv mangling.
+        let shell_path = resolve_trace_path_for_shell(&canonical)?;
         let binary = self.ensure_binary().await?.to_path_buf();
-        self.get_or_spawn_instance(canonical, move |port, canonical| async move {
-            TraceProcessorInstance::spawn(&binary, &canonical, port, self.config).await
+        self.get_or_spawn_instance(canonical, move |port, _canonical| async move {
+            TraceProcessorInstance::spawn(&binary, &shell_path, port, self.config).await
         })
         .await
     }
@@ -686,28 +691,87 @@ pub(crate) fn strip_size_suffix(loaded: &str) -> &str {
 /// signal. Catching this in Rust gives the caller a directly actionable
 /// error before the spawn — much better than a 20s timeout.
 ///
-/// On Unix this is a no-op: argv is byte-exact, and trace_processor reads
-/// paths through the same `OsStr` bytes Tokio uses to spawn.
-#[cfg_attr(not(windows), allow(unused_variables))]
-fn ensure_trace_path_supported(canonical: &Path) -> Result<()> {
+/// On Unix this is a pass-through: argv is byte-exact and trace_processor
+/// reads paths through the same `OsStr` bytes Tokio uses to spawn.
+///
+/// On Windows, when the canonical path contains non-ASCII characters, this
+/// transparently substitutes the 8.3 short name returned by
+/// `GetShortPathNameW` (e.g. `低端机traces` → `E4BDB~1`) — the NTFS-native
+/// ASCII alias survives the ANSI-codepage round-trip in
+/// `trace_processor_shell.exe`'s legacy `main(int, char*[])` entry point.
+/// If short-name generation is disabled on the volume (`fsutil 8dot3name
+/// query`) or any path component lacks a short alias, falls back to a
+/// caller-actionable error pointing at copy / manual `dir /x` workarounds.
+fn resolve_trace_path_for_shell(canonical: &Path) -> Result<PathBuf> {
     #[cfg(windows)]
     {
         let path_str = canonical.to_string_lossy();
         if !path_str.is_ascii() {
+            if let Some(short) = windows_short_path(canonical) {
+                if short.to_string_lossy().is_ascii() {
+                    tracing::info!(
+                        "rewrote non-ASCII trace path {} -> 8.3 short name {} for trace_processor_shell argv",
+                        path_str,
+                        short.display(),
+                    );
+                    return Ok(short);
+                }
+            }
             bail!(
                 "trace_processor_shell on Windows cannot read non-ASCII paths \
                  (upstream argv is decoded via the active ANSI codepage; \
-                 characters outside it become `?`).\n\
+                 characters outside it become `?`), and 8.3 short-name \
+                 generation is unavailable on this volume.\n\
                  Path contains non-ASCII characters: {path_str}\n\n\
                  Workarounds:\n\
                  - Move/copy the trace to an ASCII-only path, e.g. \
                    `Copy-Item <src> C:\\traces\\my.trace`\n\
-                 - Pass the 8.3 short name from `cmd /c dir /x \"<parent>\"` \
-                   (e.g. `C:\\Users\\admin3\\Downloads\\E4BDB~1\\...`)"
+                 - Re-enable 8.3 names: `fsutil 8dot3name set <volume> 0` \
+                   (admin)\n\
+                 - Pass an existing 8.3 short name from `cmd /c dir /x \
+                   \"<parent>\"`"
             );
         }
     }
-    Ok(())
+    Ok(canonical.to_path_buf())
+}
+
+/// Wrap `GetShortPathNameW` (kernel32.dll). Returns `None` when the path
+/// has no short alias on the volume, when 8.3 generation is disabled, or
+/// when any other Win32 error fires.
+#[cfg(windows)]
+fn windows_short_path(long_path: &Path) -> Option<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    extern "system" {
+        fn GetShortPathNameW(
+            lpsz_long_path: *const u16,
+            lpsz_short_path: *mut u16,
+            cch_buffer: u32,
+        ) -> u32;
+    }
+
+    let wide: Vec<u16> = long_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // First call probes the required buffer size (returns chars including NUL).
+    let required = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
+    if required == 0 {
+        return None;
+    }
+
+    let mut buf: Vec<u16> = vec![0; required as usize];
+    let written = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), required) };
+    // `written` is character count excluding the NUL — must be < buffer size.
+    if written == 0 || written >= required {
+        return None;
+    }
+    buf.truncate(written as usize);
+    Some(PathBuf::from(OsString::from_wide(&buf)))
 }
 
 fn push_stderr_line(stderr_tail: &SharedStderrTail, line: String) {
@@ -1649,34 +1713,70 @@ mod tests {
     }
 
     #[test]
-    fn ensure_trace_path_supported_accepts_ascii() {
-        // Whatever OS we're on, a pure-ASCII path must always pass.
+    fn resolve_trace_path_for_shell_passes_through_ascii() {
         let p = PathBuf::from("/tmp/ascii-only.perfetto-trace");
-        ensure_trace_path_supported(&p).expect("ascii path must be accepted");
+        let resolved = resolve_trace_path_for_shell(&p).expect("ascii path must pass");
+        assert_eq!(resolved, p, "ASCII path must be returned unchanged");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn resolve_trace_path_for_shell_passes_through_non_ascii_on_unix() {
+        let p = PathBuf::from("/tmp/低端机/trace.bin");
+        let resolved = resolve_trace_path_for_shell(&p)
+            .expect("non-ASCII path must pass on Unix (argv is byte-exact)");
+        assert_eq!(resolved, p);
     }
 
     #[cfg(windows)]
     #[test]
-    fn ensure_trace_path_supported_rejects_non_ascii_on_windows() {
-        let p = PathBuf::from("C:\\Users\\admin3\\Downloads\\低端机\\trace.bin");
-        let err = ensure_trace_path_supported(&p)
-            .expect_err("non-ASCII path must be rejected on Windows");
+    fn resolve_trace_path_for_shell_rewrites_non_ascii_to_short_name() {
+        // Real filesystem test on Windows: create a non-ASCII directory +
+        // file, then expect the resolver to substitute an ASCII 8.3 short
+        // name. Skip if the temp volume has 8.3 generation disabled.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("低端机traces");
+        std::fs::create_dir_all(&dir).expect("create non-ASCII dir");
+        let trace = dir.join("round13_2_trace.bin");
+        std::fs::write(&trace, b"not a real trace").expect("write file");
+
+        let canonical = trace.canonicalize().expect("canonicalize");
+        let resolved = match resolve_trace_path_for_shell(&canonical) {
+            Ok(p) => p,
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("8.3"),
+                    "fallback error must mention 8.3, got: {msg}",
+                );
+                return; // Volume has 8.3 disabled — fallback path was hit, that's fine.
+            }
+        };
+        assert!(
+            resolved.to_string_lossy().is_ascii(),
+            "rewritten path must be ASCII, got: {}",
+            resolved.display(),
+        );
+        assert_ne!(resolved, canonical, "rewrite must produce a distinct path");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_trace_path_for_shell_rejects_when_short_name_unavailable() {
+        // Path that does not exist on the filesystem — GetShortPathNameW
+        // can't produce a short alias for a missing path, so we should hit
+        // the actionable-error fallback.
+        let p = PathBuf::from("C:\\Users\\nonexistent\\低端机\\trace.bin");
+        let err = resolve_trace_path_for_shell(&p)
+            .expect_err("non-existent non-ASCII path must surface an error");
         let msg = err.to_string();
         assert!(
             msg.contains("non-ASCII"),
             "error must explain the cause, got: {msg}",
         );
         assert!(
-            msg.contains("8.3 short name") || msg.contains("ASCII-only path"),
-            "error must offer a concrete workaround, got: {msg}",
+            msg.contains("ASCII-only path") || msg.contains("8dot3name"),
+            "error must offer concrete workarounds, got: {msg}",
         );
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn ensure_trace_path_supported_is_noop_on_unix() {
-        // Non-ASCII must NOT be rejected on Unix — argv is byte-exact.
-        let p = PathBuf::from("/tmp/低端机/trace.bin");
-        ensure_trace_path_supported(&p).expect("non-ASCII path must pass on Unix");
     }
 }
