@@ -55,8 +55,15 @@ message QueryResult {
 }
 
 // Output for the /status endpoint.
+//
+// `loaded_trace_name` is `bytes` (not `string`) on purpose — wire-format is
+// identical, but trace_processor_shell echoes the argv path bytes raw on
+// CJK-locale Windows hosts (e.g. cp936 bytes for `低端机`), which fail
+// prost's UTF-8 validation when typed as `string` and break the entire
+// `decode()` for any trace whose path has non-ASCII directory components.
+// See v0.8.8 changelog for the diagnostic chain.
 message StatusResult {
-  optional string loaded_trace_name = 1;
+  optional bytes loaded_trace_name = 1;
   optional string human_readable_version = 2;
   optional int32 api_version = 3;
   optional string version_code = 4;

@@ -650,10 +650,14 @@ fn status_matches_expected_trace(status: &StatusResult, expected_trace: &Path) -
 }
 
 /// Does `/status`'s `loaded_trace_name` refer to the trace at `expected`?
-/// Matches after stripping Perfetto's `" (NN MB)"` annotation and
-/// normalizing `\` → `/`; also accepts a bare filename match.
-pub(crate) fn loaded_name_matches(loaded: &str, expected: &Path) -> bool {
-    let loaded_norm = normalize_status_path(strip_size_suffix(loaded));
+/// Lossy-decodes the bytes (trace_processor echoes argv as raw OEM-codepage
+/// bytes; on CJK locales with non-ASCII path components those bytes are
+/// invalid UTF-8), strips Perfetto's `" (NN MB)"` size annotation,
+/// normalizes `\` → `/`, and matches on full path, bare filename, or
+/// `/<filename>` suffix.
+pub(crate) fn loaded_name_matches(loaded: &[u8], expected: &Path) -> bool {
+    let loaded_lossy = String::from_utf8_lossy(loaded);
+    let loaded_norm = normalize_status_path(strip_size_suffix(&loaded_lossy));
     let expected_norm = normalize_status_path(&expected.to_string_lossy());
     if loaded_norm == expected_norm {
         return true;
@@ -661,7 +665,16 @@ pub(crate) fn loaded_name_matches(loaded: &str, expected: &Path) -> bool {
     expected
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| loaded_norm == name)
+        .is_some_and(|name| {
+            // Bare filename, or full path ending in `/<filename>` — the
+            // latter rescues CJK paths whose directory components came
+            // back mojibake'd from `String::from_utf8_lossy` but whose
+            // ASCII basename survived intact. Literal `/` separator
+            // prevents `foo.tracebin/round13_2_trace.bin` style collisions.
+            loaded_norm == name
+                || (loaded_norm.ends_with(name)
+                    && loaded_norm[..loaded_norm.len() - name.len()].ends_with('/'))
+        })
 }
 
 fn normalize_status_path(path: &str) -> String {
@@ -981,6 +994,37 @@ mod tests {
         let status = status_result(Some("foo.perfetto-trace (0 MB)"));
         let expected = PathBuf::from("/abs/path/to/foo.perfetto-trace");
         assert!(status_matches_expected_trace(&status, &expected));
+    }
+
+    /// Regression for v0.8.7 → v0.8.8: trace_processor on a cp936 host
+    /// returns `loaded_trace_name` as **raw cp936 bytes** inside the
+    /// protobuf field. As `optional string` (v0.8.7) prost rejected those
+    /// bytes as invalid UTF-8 and the entire `decode()` returned `Err` —
+    /// `wait_ready` then never saw `is_ok()` and timed out. As `optional
+    /// bytes` (v0.8.8) decode must succeed and surface the raw bytes.
+    /// Locks the schema so a future revert to `string` would fail CI.
+    #[test]
+    fn status_result_decodes_when_loaded_trace_name_has_invalid_utf8() {
+        use prost::Message;
+        // Wire bytes captured from a real cp936 Win11 host running
+        // `trace_processor_shell -D --http-port 9099 "...低端机..."`:
+        // tag=(field 1 << 3) | 2 = 0x0A, length-delimited; payload is
+        // "C:/Users/admin3/Downloads/<低端机:cp936>traces/traces/round13_2_trace.bin (28 MB)".
+        let payload = b"C:/Users/admin3/Downloads/\xb5\xcd\xb6\xcb\xbb\xfatraces/traces/round13_2_trace.bin (28 MB)";
+        let mut wire = Vec::with_capacity(2 + payload.len());
+        wire.push(0x0A);
+        wire.push(payload.len() as u8); // varint OK for len < 128
+        wire.extend_from_slice(payload);
+        let status = StatusResult::decode(&wire[..])
+            .expect("StatusResult must decode cp936 bytes after the optional bytes retype");
+        let name = status
+            .loaded_trace_name
+            .expect("loaded_trace_name must round-trip through the wire");
+        assert!(
+            name.windows(6)
+                .any(|w| w == [0xB5, 0xCD, 0xB6, 0xCB, 0xBB, 0xFA]),
+            "raw cp936 bytes must survive intact, got {name:?}",
+        );
     }
 
     #[test]
@@ -1708,7 +1752,7 @@ mod tests {
 
     fn status_result(loaded_trace_name: Option<&str>) -> StatusResult {
         StatusResult {
-            loaded_trace_name: loaded_trace_name.map(str::to_owned),
+            loaded_trace_name: loaded_trace_name.map(|s| s.as_bytes().to_vec()),
             human_readable_version: None,
             api_version: None,
             version_code: None,

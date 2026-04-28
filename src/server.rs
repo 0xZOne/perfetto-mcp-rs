@@ -822,14 +822,18 @@ fn sql_string_literal(s: &str) -> Result<String, PerfettoError> {
 /// a name that differs from the filesystem path we loaded — typically because
 /// the trace's recording embedded a different name — surface both so users do
 /// not mistake it for the wrong file loading.
-fn format_loaded_trace_display(trace_path: &str, loaded_trace_name: Option<&str>) -> String {
+fn format_loaded_trace_display(trace_path: &str, loaded_trace_name: Option<&[u8]>) -> String {
     let Some(loaded) = loaded_trace_name else {
         return trace_path.to_string();
     };
     if loaded_name_matches(loaded, Path::new(trace_path)) {
         trace_path.to_string()
     } else {
-        format!("{trace_path} (recorded as '{}')", strip_size_suffix(loaded))
+        let loaded_lossy = String::from_utf8_lossy(loaded);
+        format!(
+            "{trace_path} (recorded as '{}')",
+            strip_size_suffix(&loaded_lossy)
+        )
     }
 }
 
@@ -849,15 +853,15 @@ mod tests {
     #[test]
     fn format_loaded_trace_display_shows_only_path_when_name_matches() {
         assert_eq!(
-            format_loaded_trace_display("/tmp/trace.pftrace", Some("/tmp/trace.pftrace")),
+            format_loaded_trace_display("/tmp/trace.pftrace", Some(b"/tmp/trace.pftrace")),
             "/tmp/trace.pftrace"
         );
         assert_eq!(
-            format_loaded_trace_display("/tmp/trace.pftrace", Some("trace.pftrace")),
+            format_loaded_trace_display("/tmp/trace.pftrace", Some(b"trace.pftrace")),
             "/tmp/trace.pftrace"
         );
         assert_eq!(
-            format_loaded_trace_display("/tmp/trace.pftrace", Some("/tmp/trace.pftrace (12 MB)")),
+            format_loaded_trace_display("/tmp/trace.pftrace", Some(b"/tmp/trace.pftrace (12 MB)")),
             "/tmp/trace.pftrace"
         );
     }
@@ -867,7 +871,7 @@ mod tests {
         assert_eq!(
             format_loaded_trace_display(
                 "C:\\Users\\admin\\trace.gz",
-                Some("C:/Users/admin/trace.gz")
+                Some(b"C:/Users/admin/trace.gz")
             ),
             "C:\\Users\\admin\\trace.gz"
         );
@@ -878,7 +882,7 @@ mod tests {
         assert_eq!(
             format_loaded_trace_display(
                 "C:\\Users\\admin\\trace_pdf.json.gz",
-                Some("scroll_jank.pftrace")
+                Some(b"scroll_jank.pftrace")
             ),
             "C:\\Users\\admin\\trace_pdf.json.gz (recorded as 'scroll_jank.pftrace')"
         );
@@ -889,6 +893,29 @@ mod tests {
         assert_eq!(
             format_loaded_trace_display("/tmp/trace.pftrace", None),
             "/tmp/trace.pftrace"
+        );
+    }
+
+    /// Regression test for v0.8.7 → v0.8.8: trace_processor on a CJK-locale
+    /// Windows host echoes the argv path bytes raw in `/status`. Those
+    /// bytes are cp936-encoded (e.g. `低端机` → `\xb5\xcd\xb6\xcb\xbb\xfa`)
+    /// and not valid UTF-8 — but the basename is ASCII and survives
+    /// `String::from_utf8_lossy`. The path-suffix-on-basename match must
+    /// accept these mojibake'd directory paths. Forward slashes on both
+    /// sides keep `Path::file_name()` portable across Unix/Windows CI;
+    /// the real-world Windows path uses `\` but the matcher already
+    /// normalizes both sides through `normalize_status_path`.
+    #[test]
+    fn format_loaded_trace_display_matches_when_cjk_dir_arrives_as_cp936() {
+        let loaded: &[u8] =
+            b"C:/Users/admin/Downloads/\xb5\xcd\xb6\xcb\xbb\xfatraces/round13_2_trace.bin (28 MB)";
+        assert_eq!(
+            format_loaded_trace_display(
+                "C:/Users/admin/Downloads/低端机traces/round13_2_trace.bin",
+                Some(loaded),
+            ),
+            "C:/Users/admin/Downloads/低端机traces/round13_2_trace.bin",
+            "basename match must rescue the CJK-locale mojibake'd path"
         );
     }
 
