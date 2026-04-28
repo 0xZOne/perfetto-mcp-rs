@@ -80,7 +80,7 @@ impl TraceProcessorInstance {
             .arg(port.to_string())
             .arg(trace_path)
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()
@@ -96,7 +96,12 @@ impl TraceProcessorInstance {
             .stderr
             .take()
             .context("failed to capture trace_processor_shell stderr")?;
+        let stdout = process
+            .stdout
+            .take()
+            .context("failed to capture trace_processor_shell stdout")?;
         let (mut startup_rx, stderr_tail) = spawn_stderr_drain(stderr, port);
+        spawn_stdout_drain(stdout, port, Arc::clone(&stderr_tail));
         let client = TraceProcessorClient::new(port, config.request_timeout);
 
         let mut instance = Self {
@@ -361,6 +366,7 @@ impl TraceProcessorManager {
         let canonical = trace_path
             .canonicalize()
             .with_context(|| format!("trace file not found: {}", trace_path.display()))?;
+        ensure_trace_path_supported(&canonical)?;
         let binary = self.ensure_binary().await?.to_path_buf();
         self.get_or_spawn_instance(canonical, move |port, canonical| async move {
             TraceProcessorInstance::spawn(&binary, &canonical, port, self.config).await
@@ -502,14 +508,23 @@ fn spawn_stderr_drain(
     tokio::spawn(async move {
         let needles = StartupNeedles::for_port(port);
         let mut startup_state = StartupLogState::default();
-        // Stops allocating on every stderr line once startup resolves.
+        // Stops parsing once startup resolves.
         let mut parse_startup = true;
-        let mut lines = BufReader::new(stderr).lines();
+        let mut reader = BufReader::new(stderr);
+        let mut buf = Vec::with_capacity(256);
 
         loop {
-            match lines.next_line().await {
-                Ok(Some(raw_line)) => {
-                    let line = raw_line.trim_end_matches('\r').to_owned();
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    // Lossy decode keeps the drain alive when trace_processor_shell
+                    // emits non-UTF-8 bytes (e.g. ANSI-codepage error text on
+                    // Windows). Invalid sequences become `�`; ASCII portions
+                    // (errno codes, paths, file sizes, port numbers) survive,
+                    // so startup needle matching and LLM-facing diagnostics keep
+                    // working even on a Chinese-locale Windows shell.
+                    let line = decode_output_line(&buf);
                     tracing::info!("trace_processor_shell[{port}] stderr: {line}");
                     push_stderr_line(&stderr_tail_task, &line);
 
@@ -522,7 +537,6 @@ fn spawn_stderr_drain(
                         }
                     }
                 }
-                Ok(None) => break,
                 Err(err) => {
                     tracing::warn!("failed reading trace_processor_shell[{port}] stderr: {err}");
                     push_stderr_line(&stderr_tail_task, &format!("stderr read error: {err}"));
@@ -533,6 +547,54 @@ fn spawn_stderr_drain(
     });
 
     (startup_rx, stderr_tail)
+}
+
+/// stdout drain — feeds the same tail as stderr (with `[stdout] ` prefix) so
+/// failures whose root cause is printed to stdout (some Perfetto / fopen paths
+/// surface there) reach `format_stderr_tail` and the LLM. Does not parse
+/// startup needles — those are stderr-only.
+fn spawn_stdout_drain(
+    stdout: tokio::process::ChildStdout,
+    port: u16,
+    stderr_tail: SharedStderrTail,
+) {
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stdout);
+        let mut buf = Vec::with_capacity(256);
+
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    let line = decode_output_line(&buf);
+                    tracing::info!("trace_processor_shell[{port}] stdout: {line}");
+                    push_stderr_line(&stderr_tail, &format!("[stdout] {line}"));
+                }
+                Err(err) => {
+                    tracing::warn!("failed reading trace_processor_shell[{port}] stdout: {err}");
+                    push_stderr_line(&stderr_tail, &format!("[stdout] read error: {err}"));
+                    break;
+                }
+            }
+        }
+    });
+}
+
+/// Strip a trailing `\n` (and optional preceding `\r`), then lossy-decode.
+fn decode_output_line(buf: &[u8]) -> String {
+    let trimmed = match buf.last() {
+        Some(b'\n') => {
+            let body = &buf[..buf.len() - 1];
+            if body.last() == Some(&b'\r') {
+                &body[..body.len() - 1]
+            } else {
+                body
+            }
+        }
+        _ => buf,
+    };
+    String::from_utf8_lossy(trimmed).into_owned()
 }
 
 struct StartupNeedles {
@@ -616,6 +678,42 @@ pub(crate) fn strip_size_suffix(loaded: &str) -> &str {
     }
 }
 
+/// Reject trace paths whose argv encoding will mangle on the target OS.
+///
+/// On Windows, `trace_processor_shell.exe` consumes argv via the legacy
+/// `int main(int, char*[])` entry point: bytes are decoded against the
+/// active ANSI codepage, so any character outside that codepage's mapping
+/// (most non-ASCII content, including Chinese paths under any non-CJK
+/// locale) becomes `?`. fopen then fails on a path that does not exist,
+/// the shell exits, and our readiness probe times out with no actionable
+/// signal. Catching this in Rust gives the caller a directly actionable
+/// error before the spawn — much better than a 20s timeout.
+///
+/// On Unix this is a no-op: argv is byte-exact, and trace_processor reads
+/// paths through the same `OsStr` bytes Tokio uses to spawn.
+fn ensure_trace_path_supported(canonical: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        let path_str = canonical.to_string_lossy();
+        if !path_str.is_ascii() {
+            bail!(
+                "trace_processor_shell on Windows cannot read non-ASCII paths \
+                 (upstream argv is decoded via the active ANSI codepage; \
+                 characters outside it become `?`).\n\
+                 Path contains non-ASCII characters: {path_str}\n\n\
+                 Workarounds:\n\
+                 - Move/copy the trace to an ASCII-only path, e.g. \
+                   `Copy-Item <src> C:\\traces\\my.trace`\n\
+                 - Pass the 8.3 short name from `cmd /c dir /x \"<parent>\"` \
+                   (e.g. `C:\\Users\\admin3\\Downloads\\E4BDB~1\\...`)"
+            );
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = canonical;
+    Ok(())
+}
+
 fn push_stderr_line(stderr_tail: &SharedStderrTail, line: &str) {
     let mut tail = stderr_tail.lock().expect("stderr tail poisoned");
     if tail.len() == STDERR_TAIL_CAPACITY {
@@ -630,7 +728,8 @@ fn format_stderr_tail(stderr_tail: &SharedStderrTail) -> String {
         String::new()
     } else {
         format!(
-            "\nstderr tail:\n{}",
+            "\noutput tail (stderr + stdout, last {} lines):\n{}",
+            tail.len(),
             tail.iter().cloned().collect::<Vec<_>>().join("\n")
         )
     }
@@ -1504,5 +1603,82 @@ mod tests {
 
     fn status_for_trace(trace_path: &Path) -> StatusResult {
         status_result(Some(&format!("{} (0 MB)", trace_path.display())))
+    }
+
+    #[test]
+    fn decode_output_line_strips_lf_crlf_and_keeps_ascii() {
+        assert_eq!(decode_output_line(b"hello"), "hello");
+        assert_eq!(decode_output_line(b"hello\n"), "hello");
+        assert_eq!(decode_output_line(b"hello\r\n"), "hello");
+        // Bare \r is preserved (not a terminator on its own).
+        assert_eq!(decode_output_line(b"a\rb\n"), "a\rb");
+    }
+
+    #[test]
+    fn decode_output_line_replaces_invalid_utf8_with_replacement_char() {
+        // ANSI codepage byte sequence that isn't valid UTF-8 — the kind of
+        // payload Windows trace_processor_shell prints when reporting a
+        // mangled non-ASCII path.
+        let bytes = b"open failed: \xc4\xe3\xba\xc3\n"; // GBK-encoded "你好"
+        let decoded = decode_output_line(bytes);
+        assert!(
+            decoded.starts_with("open failed: "),
+            "ASCII prefix must survive lossy decode, got: {decoded:?}",
+        );
+        assert!(
+            decoded.contains('\u{FFFD}'),
+            "invalid bytes must become U+FFFD, got: {decoded:?}",
+        );
+        // The drain stays alive — no panic, no error returned.
+    }
+
+    #[test]
+    fn format_stderr_tail_labels_combined_streams() {
+        let tail: SharedStderrTail =
+            Arc::new(StdMutex::new(std::collections::VecDeque::from(vec![
+                "[HTTP] starting".to_owned(),
+                "[stdout] ready hint".to_owned(),
+            ])));
+        let formatted = format_stderr_tail(&tail);
+        assert!(
+            formatted.contains("stderr + stdout"),
+            "label must signal both streams are folded in, got: {formatted}",
+        );
+        assert!(
+            formatted.contains("[stdout] ready hint"),
+            "stdout-tagged lines must surface, got: {formatted}",
+        );
+    }
+
+    #[test]
+    fn ensure_trace_path_supported_accepts_ascii() {
+        // Whatever OS we're on, a pure-ASCII path must always pass.
+        let p = PathBuf::from("/tmp/ascii-only.perfetto-trace");
+        ensure_trace_path_supported(&p).expect("ascii path must be accepted");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ensure_trace_path_supported_rejects_non_ascii_on_windows() {
+        let p = PathBuf::from("C:\\Users\\admin3\\Downloads\\低端机\\trace.bin");
+        let err = ensure_trace_path_supported(&p)
+            .expect_err("non-ASCII path must be rejected on Windows");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("non-ASCII"),
+            "error must explain the cause, got: {msg}",
+        );
+        assert!(
+            msg.contains("8.3 short name") || msg.contains("ASCII-only path"),
+            "error must offer a concrete workaround, got: {msg}",
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ensure_trace_path_supported_is_noop_on_unix() {
+        // Non-ASCII must NOT be rejected on Unix — argv is byte-exact.
+        let p = PathBuf::from("/tmp/低端机/trace.bin");
+        ensure_trace_path_supported(&p).expect("non-ASCII path must pass on Unix");
     }
 }
