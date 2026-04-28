@@ -86,8 +86,11 @@ async fn run_server(cli: Cli) -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::filter::EnvFilter::from_default_env())
         .init();
 
-    let startup_timeout_ms =
-        resolve_timeout_ms(cli.startup_timeout_ms, "PERFETTO_STARTUP_TIMEOUT_MS", 5_000)?;
+    let startup_timeout_ms = resolve_timeout_ms(
+        cli.startup_timeout_ms,
+        "PERFETTO_STARTUP_TIMEOUT_MS",
+        20_000,
+    )?;
     let query_timeout_ms =
         resolve_timeout_ms(cli.query_timeout_ms, "PERFETTO_QUERY_TIMEOUT_MS", 30_000)?;
 

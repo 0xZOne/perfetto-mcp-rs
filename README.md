@@ -209,7 +209,7 @@ CLI flags:
 | Flag | Default | Description |
 |---|---|---|
 | `--max-instances` | 3 | Maximum cached `trace_processor_shell` processes (LRU-evicted) |
-| `--startup-timeout-ms` | 5000 | Max time to wait for a spawned `trace_processor_shell` to become ready |
+| `--startup-timeout-ms` | 20000 | Max time to wait for a spawned `trace_processor_shell` to become ready |
 | `--query-timeout-ms` | 30000 | HTTP timeout for `/status` and `/query` requests |
 
 ## Build from source

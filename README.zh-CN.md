@@ -201,7 +201,7 @@ codex mcp add perfetto-mcp-rs -- /absolute/path/to/perfetto-mcp-rs
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `--max-instances` | 3 | 最多缓存几个 `trace_processor_shell` 进程，超过按 LRU 淘汰 |
-| `--startup-timeout-ms` | 5000 | 等待新启动 `trace_processor_shell` 就绪的最长时间 |
+| `--startup-timeout-ms` | 20000 | 等待新启动 `trace_processor_shell` 就绪的最长时间 |
 | `--query-timeout-ms` | 30000 | `/status` 和 `/query` 请求的 HTTP 超时 |
 
 ## 从源码构建

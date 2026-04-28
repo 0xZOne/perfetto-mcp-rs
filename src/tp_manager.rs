@@ -32,7 +32,7 @@ pub struct TraceProcessorConfig {
 impl Default for TraceProcessorConfig {
     fn default() -> Self {
         Self {
-            startup_timeout: Duration::from_secs(5),
+            startup_timeout: Duration::from_secs(20),
             request_timeout: Duration::from_secs(30),
         }
     }
