@@ -2,6 +2,11 @@
 
 ## perfetto-mcp-rs 0.x Changes
 
+### [0.10.2](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.10.2) (April 29, 2026)
+
+- **`install.sh` accepts a `--version` flag.** v0.10.1 documented the correct env-var pinning form (`curl … | VERSION=v0.7.0 sh`), but old/cached invocations of the form `VERSION=v0.7.0 curl … | sh` still silently fall through to "latest" — POSIX shell scopes `VAR=value cmd` to the immediately-following command only, so `VERSION` reaches `curl` (which doesn't read it) and never the piped `sh`. The flag form `curl … | sh -s -- --version v0.7.0` follows the rustup / pnpm convention and survives the shell-pipe pitfall. Both `--version <tag>`, `--version=<tag>`, and `-V <tag>` are accepted; flag wins over env var when both are set. Added a `-h`/`--help` summary too. README en/zh now lead with the flag form, document the env-var form with an explicit warning about the `VAR=value` ordering, and call out that `$env:VERSION = '...'; irm ... | iex` is correct on PowerShell because `iex` runs in the current session.
+- `install.ps1` is unchanged — PowerShell has no equivalent of POSIX `VAR=value cmd` syntax (it errors instead of silently scoping), so the broken pattern that motivated the flag doesn't exist on the Windows side.
+
 ### [0.10.1](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.10.1) (April 29, 2026)
 
 - **`chrome_main_thread_hotspots` accepts optional `process_name` and `pid` filters.** Multi-renderer Chrome traces previously mixed all main-thread hotspots from Browser, GPU, and every Renderer into one `LIMIT 100` bucket — analyzing a specific page's renderer required falling back to `execute_sql` with custom `WHERE` clauses. Both filters are optional and AND together when set: `process_name='Renderer'` to scope to all renderers, `pid=<pid>` to disambiguate among same-named processes (look up via `list_processes`). The previously-exported `CHROME_MAIN_THREAD_HOTSPOTS_SQL` constant becomes the `chrome_main_thread_hotspots_sql(process_name, pid)` builder function — integration tests adapted accordingly. Base SQL gains `JOIN process p ON ct.upid = p.upid` so `p.pid` is referenceable; the join is harmless when no pid filter is set.

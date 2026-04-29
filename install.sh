@@ -4,7 +4,13 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh
 #
-# Environment overrides:
+# Pin a specific version (recommended over the env-var form — it survives
+# the `VAR=value curl … | sh` shell-pipe pitfall, which only sets VAR for
+# `curl`, not the piped `sh`):
+#
+#   curl -fsSL …install.sh | sh -s -- --version v0.10.0
+#
+# Environment overrides (read if no equivalent flag is passed; flag wins):
 #   INSTALL_DIR   Where to place the binary (default: $HOME/.local/bin)
 #   REPO          GitHub slug to download from (default: 0xZOne/perfetto-mcp-rs)
 #   VERSION       Release tag to install (default: latest)
@@ -12,6 +18,34 @@
 #                 local/project, run this script from the target project dir.
 
 set -eu
+
+# Argv parsing FIRST so flags can override env vars. Pattern follows
+# rustup / pnpm — `sh -s -- --flag value` is the canonical "shell
+# installer" form that sidesteps the shell-pipe env-var pitfall.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --version)
+      [ $# -ge 2 ] || { printf 'error: --version requires a tag argument\n' >&2; exit 1; }
+      VERSION="$2"; shift 2 ;;
+    --version=*)
+      VERSION="${1#--version=}"; shift ;;
+    -V)
+      [ $# -ge 2 ] || { printf 'error: -V requires a tag argument\n' >&2; exit 1; }
+      VERSION="$2"; shift 2 ;;
+    -h|--help)
+      cat <<'USAGE'
+Usage: install.sh [--version <tag>] [-V <tag>] [-h|--help]
+
+Pin a specific release with --version or -V. Without a flag, the script
+honors the VERSION env var (if set), else installs the latest release.
+
+Other env overrides: INSTALL_DIR, REPO, SCOPE. See script header.
+USAGE
+      exit 0 ;;
+    *)
+      printf 'warning: ignoring unknown arg %s\n' "$1" >&2; shift ;;
+  esac
+done
 
 : "${REPO:=0xZOne/perfetto-mcp-rs}"
 : "${INSTALL_DIR:=${HOME}/.local/bin}"

@@ -78,10 +78,25 @@ Re-run the same install command — it pulls the latest release, safely
 overwrites the existing binary (with Windows file-lock retry), and
 re-registers the MCP server with Claude Code / Codex idempotently.
 
-Pin to a specific version with the `VERSION` env var:
+Pin to a specific version with the `--version` flag:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh -s -- --version v0.7.0
+```
+
+The `VERSION` env var also works, but **must come immediately before `sh`**
+(POSIX `VAR=value cmd` only scopes to the next command — `VERSION=v0.7.0 curl
+... | sh` puts `VERSION` on `curl`, not on the piped `sh`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | VERSION=v0.7.0 sh
+```
+
+PowerShell — set `$env:VERSION` in the same line, since `iex` runs in the
+current session:
+
+```powershell
+$env:VERSION = 'v0.7.0'; irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.ps1 | iex
 ```
 
 No auto-update daemon — upgrades are explicit.

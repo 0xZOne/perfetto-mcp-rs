@@ -75,10 +75,24 @@ chmod +x perfetto-mcp-rs
 直接重跑安装命令——会拉取最新 release，安全覆盖现有二进制（Windows 下
 带文件锁重试），并幂等地重新注册到 Claude Code / Codex。
 
-用 `VERSION` 环境变量指定特定版本：
+用 `--version` flag 指定特定版本（推荐，避开 shell pipe 的 env var 陷阱）：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh -s -- --version v0.7.0
+```
+
+`VERSION` 环境变量也支持，但**必须紧贴 `sh` 写**（POSIX 的
+`VAR=value cmd` 只把 VAR 给紧跟的那个 cmd——写成 `VERSION=v0.7.0 curl ... | sh`
+是给了 curl，不会传到管道后的 sh）：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | VERSION=v0.7.0 sh
+```
+
+PowerShell 直接在同一行设 `$env:VERSION`，`iex` 在当前 session 里执行能看到：
+
+```powershell
+$env:VERSION = 'v0.7.0'; irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.ps1 | iex
 ```
 
 无后台自动更新——升级由用户显式触发。
