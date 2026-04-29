@@ -112,8 +112,8 @@ fn e2e_chrome_main_thread_hotspots_against_fixture() {
         let trace = Path::new("tests/fixtures/page_loads.pftrace");
 
         let client = manager.get_client(trace).await.expect("spawn tp_shell");
-        let sql =
-            chrome_main_thread_hotspots_sql(None, None).expect("hotspots SQL builder must succeed");
+        let sql = chrome_main_thread_hotspots_sql(None, None, None, None)
+            .expect("hotspots SQL builder must succeed");
         let table = client
             .query(&sql)
             .await

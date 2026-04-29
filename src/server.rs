@@ -44,15 +44,31 @@ impl ServerHandler for PerfettoMcpServer {
 }
 
 // -- Tool parameter types --------------------------------------------------
+//
+// Every params struct carries `#[serde(deny_unknown_fields)]` so that
+// hallucinated fields (e.g. an LLM passing `min_dur_ms` to `load_trace` or
+// `threshold_ms` to `chrome_main_thread_hotspots`) surface as explicit
+// deserialization errors instead of being silently dropped. The motivating
+// incident: a v0.11.0 Claude Code session passed `chrome_main_thread_hotspots
+// (min_dur_ms: "16", limit: "25")` — both fields hallucinated, both silently
+// ignored, the call succeeded with the hardcoded defaults and the LLM never
+// learned its filter didn't apply. With `deny_unknown_fields`, the same call
+// fails fast with a message naming the offending field, and the LLM can self-
+// correct on the retry.
+//
+// Note: serde aliases (`#[serde(alias = "trace_path")]`) are recognized as
+// the field they alias, so they don't trigger the unknown-field error.
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct LoadTraceParams {
     /// Absolute path to a Perfetto trace file (.perfetto-trace or .pftrace).
     #[serde(alias = "trace_path")]
     pub path: String,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExecuteSqlParams {
     /// Absolute path to the trace file to query against.
     #[serde(alias = "trace_path")]
@@ -61,7 +77,8 @@ pub struct ExecuteSqlParams {
     pub sql: String,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListTablesParams {
     /// Absolute path to the trace file.
     #[serde(alias = "trace_path")]
@@ -71,7 +88,8 @@ pub struct ListTablesParams {
     pub pattern: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TableStructureParams {
     /// Absolute path to the trace file.
     #[serde(alias = "trace_path")]
@@ -80,14 +98,16 @@ pub struct TableStructureParams {
     pub table_name: String,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListProcessesParams {
     /// Absolute path to the trace file.
     #[serde(alias = "trace_path")]
     pub path: String,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListThreadsInProcessParams {
     /// Absolute path to the trace file.
     #[serde(alias = "trace_path")]
@@ -103,14 +123,16 @@ pub struct ListThreadsInProcessParams {
     pub process_name: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ChromeTraceParams {
     /// Absolute path to the trace file (must be a Chrome trace).
     #[serde(alias = "trace_path")]
     pub path: String,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ChromeMainThreadHotspotsParams {
     /// Absolute path to the trace file (must be a Chrome trace).
     #[serde(alias = "trace_path")]
@@ -124,9 +146,21 @@ pub struct ChromeMainThreadHotspotsParams {
     /// ANDed with `process_name` when both are set.
     #[serde(default)]
     pub pid: Option<i64>,
+    /// Optional minimum task duration in milliseconds. Defaults to 16 ms (one
+    /// 60 Hz frame budget). Pass 0 to see ALL main-thread tasks; raise to e.g.
+    /// 33 (30 Hz) or 100 to focus on the worst stutters. Must be a finite
+    /// non-negative number.
+    #[serde(default)]
+    pub min_dur_ms: Option<f64>,
+    /// Optional max rows to return. Defaults to 100 and is capped at 5000 to
+    /// match `execute_sql`. Lower values keep responses short; higher values
+    /// surface long tails of mid-duration tasks.
+    #[serde(default)]
+    pub limit: Option<u32>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListStdlibModulesParams {}
 
 /// Output of `list_tables`. Just the matching names; the count is implicit
@@ -243,15 +277,46 @@ pub const CHROME_PAGE_LOAD_SUMMARY_SQL: &str = "INCLUDE PERFETTO MODULE chrome.p
 /// Optional filters:
 /// - `process_name` adds `AND ct.process_name = '<name>'`
 /// - `pid` adds `AND p.pid = <pid>`
+/// - `min_dur_ms` overrides the default 16 ms threshold (must be a finite
+///   non-negative number; 0 returns all main-thread tasks)
+/// - `limit` overrides the default LIMIT 100 (capped at MAX_ROWS = 5000;
+///   must be > 0)
 ///
-/// Both AND together when set. The base SQL also picks up a
+/// Both filter clauses AND together when set. The base SQL also picks up a
 /// `JOIN process p ON ct.upid = p.upid` so `p.pid` is referenceable; the
-/// join is harmless when no pid filter is present.
+/// join is harmless when no pid filter is present. Defaults preserve the
+/// pre-knob behavior so a `(None, None, None, None)` call is byte-equivalent
+/// to the legacy hardcoded SQL save for the `JOIN process` clause.
 pub fn chrome_main_thread_hotspots_sql(
     process_name: Option<&str>,
     pid: Option<i64>,
+    min_dur_ms: Option<f64>,
+    limit: Option<u32>,
 ) -> Result<String, PerfettoError> {
-    let mut sql = String::from(
+    let min_dur_ns: i64 = match min_dur_ms {
+        None => 16_000_000,
+        Some(ms) => {
+            // Guard against finite-but-huge ms saturating the cast to i64::MAX
+            // and silently returning 0 rows — the silent-default failure mode
+            // this release is trying to eliminate.
+            let ns = ms * 1_000_000.0;
+            if !(ns.is_finite() && ns >= 0.0 && ns <= i64::MAX as f64) {
+                return Err(PerfettoError::InvalidParam(format!(
+                    "min_dur_ms must be finite, non-negative, and ≤ ~9.2e12 ms, got {ms}"
+                )));
+            }
+            ns as i64
+        }
+    };
+    let row_limit: u32 = match limit {
+        None => 100,
+        Some(0) => {
+            return Err(PerfettoError::InvalidParam("limit must be > 0".to_owned()));
+        }
+        Some(n) if (n as usize) > MAX_ROWS => MAX_ROWS as u32,
+        Some(n) => n,
+    };
+    let mut sql = format!(
         "INCLUDE PERFETTO MODULE chrome.tasks; \
          SELECT \
            ct.id, \
@@ -268,7 +333,7 @@ pub fn chrome_main_thread_hotspots_sql(
          JOIN thread t ON ct.utid = t.utid \
          JOIN process p ON ct.upid = p.upid \
          WHERE t.is_main_thread = 1 \
-           AND ct.dur > 16000000",
+           AND ct.dur > {min_dur_ns}",
     );
     if let Some(name) = process_name {
         let lit = sql_string_literal(name)?;
@@ -277,7 +342,7 @@ pub fn chrome_main_thread_hotspots_sql(
     if let Some(pid) = pid {
         sql.push_str(&format!(" AND p.pid = {pid}"));
     }
-    sql.push_str(" ORDER BY ct.dur DESC LIMIT 100");
+    sql.push_str(&format!(" ORDER BY ct.dur DESC LIMIT {row_limit}"));
     Ok(sql)
 }
 
@@ -692,23 +757,28 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "chrome_main_thread_hotspots",
-        description = "Top Chrome main-thread tasks by wall duration (threshold 16 ms). \
-                       Uses thread.is_main_thread = 1 (tid == pid per Linux convention) \
+        description = "Top Chrome main-thread tasks by wall duration. Uses \
+                       thread.is_main_thread = 1 (tid == pid per Linux convention) \
                        to identify main threads. Columns: id, name, task_type, \
                        thread_name, process_name, dur_ms, cpu_pct (thread_dur/dur), \
                        thread_dur_ms. Uses chrome.tasks. Chrome traces only.\n\
                        \n\
-                       Optional `process_name` and `pid` filters scope to one process \
-                       or one process type. Multi-renderer traces benefit from `pid` \
-                       (look up via list_processes); use `process_name='Renderer'` to \
-                       see all renderers' main threads together. Both filters AND when \
-                       set.\n\
+                       Optional knobs:\n\
+                       - `process_name` / `pid`: scope to one process or process \
+                         type. Multi-renderer traces benefit from `pid` (look up via \
+                         list_processes); use `process_name='Renderer'` to see all \
+                         renderers' main threads together. Both AND when set.\n\
+                       - `min_dur_ms`: minimum task duration in ms. Defaults to 16 \
+                         (one 60 Hz frame). Pass 0 for ALL tasks; raise to 33 (30 Hz) \
+                         or 100 to focus on bigger stutters.\n\
+                       - `limit`: max rows (omit for default 100; capped at 5000). \
+                         Must be > 0 if set.\n\
                        \n\
-                       Empty `rows` means either all main-thread tasks stayed under \
-                       the 16 ms frame budget (good performance), or thread metadata \
-                       is incomplete (is_main_thread is NULL). If the latter is \
-                       suspected, retry with execute_sql filtering on thread_name IN \
-                       ('CrBrowserMain', 'CrRendererMain') to bypass the \
+                       Empty `rows` means either no main-thread tasks exceeded \
+                       `min_dur_ms` (good performance at that threshold), or thread \
+                       metadata is incomplete (is_main_thread is NULL). If the latter \
+                       is suspected, retry with execute_sql filtering on thread_name \
+                       IN ('CrBrowserMain', 'CrRendererMain') to bypass the \
                        is_main_thread filter."
     )]
     async fn chrome_main_thread_hotspots(
@@ -717,8 +787,13 @@ impl PerfettoMcpServer {
     ) -> Result<String, String> {
         let client = self.client_for(&params.path).await?;
         ensure_chrome_trace(&client, "Chrome main-thread hotspots").await?;
-        let sql = chrome_main_thread_hotspots_sql(params.process_name.as_deref(), params.pid)
-            .map_err(|e| e.to_string())?;
+        let sql = chrome_main_thread_hotspots_sql(
+            params.process_name.as_deref(),
+            params.pid,
+            params.min_dur_ms,
+            params.limit,
+        )
+        .map_err(|e| e.to_string())?;
         let table = client
             .query(&sql)
             .await
@@ -1488,6 +1563,8 @@ mod tests {
                     path: non_chrome_path.to_owned(),
                     process_name: None,
                     pid: None,
+                    min_dur_ms: None,
+                    limit: None,
                 }))
                 .await;
             let err = r
@@ -1574,7 +1651,9 @@ mod tests {
     /// v0.11.0 renamed the trace-file param from `trace_path` to `path`
     /// across every tool's input. Old callers passing `trace_path` must
     /// still work via `#[serde(alias = "trace_path")]` so v0.10.x scripts
-    /// don't break on upgrade.
+    /// don't break on upgrade. v0.11.1 added `#[serde(deny_unknown_fields)]`
+    /// to every params type, but serde aliases are recognized as the field
+    /// they alias and so still deserialize — this test pins both halves.
     #[test]
     fn params_accept_trace_path_alias_for_backwards_compat() {
         let from_path: ExecuteSqlParams =
@@ -1585,6 +1664,62 @@ mod tests {
                 .expect("legacy `trace_path` alias must still deserialize");
         assert_eq!(from_path.path, "/x");
         assert_eq!(from_alias.path, "/x");
+    }
+
+    /// `#[serde(deny_unknown_fields)]` makes hallucinated fields fail fast
+    /// instead of being silently dropped. Pinned on
+    /// `ChromeMainThreadHotspotsParams` because that struct was the
+    /// motivating incident — a v0.11.0 session passed
+    /// `min_dur_xxxxxxx: "16"` (typo in the new field name) and got back a
+    /// success with the default 16 ms threshold. With deny_unknown_fields,
+    /// the same call now errors with the offending field named.
+    #[test]
+    fn chrome_main_thread_hotspots_params_rejects_unknown_fields() {
+        let err = serde_json::from_str::<ChromeMainThreadHotspotsParams>(
+            r#"{"path": "/x", "threshold_ms": 16, "max_results": 25}"#,
+        )
+        .expect_err("unknown fields must produce an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("threshold_ms") || msg.contains("max_results"),
+            "error must name at least one of the offending fields, got: {msg}",
+        );
+    }
+
+    /// Same guarantee on `LoadTraceParams` — picks up future regressions if
+    /// `deny_unknown_fields` is dropped from the most-called tool first.
+    #[test]
+    fn load_trace_params_rejects_unknown_fields() {
+        let err = serde_json::from_str::<LoadTraceParams>(r#"{"path": "/x", "lazy": true}"#)
+            .expect_err("unknown field `lazy` must error");
+        assert!(
+            err.to_string().contains("lazy"),
+            "error must name the offending field, got: {err}",
+        );
+    }
+
+    /// The advertised inputSchema reflects the closed contract too: schemars
+    /// emits `additionalProperties: false` when `deny_unknown_fields` is set.
+    /// LLMs reading `tools/list` see a closed schema and (in theory) are less
+    /// prone to hallucinate fields. The 9 advertised tools all carry params
+    /// with `deny_unknown_fields` (`ListStdlibModulesParams` is empty but
+    /// still closed). If anyone drops the attribute, this test fails on the
+    /// affected tool's schema.
+    #[test]
+    fn tool_input_schemas_advertise_closed_object() {
+        let server = test_server();
+        for tool in server.tool_router.list_all() {
+            let schema_value =
+                serde_json::to_value(&tool.input_schema).expect("input schema must serialize");
+            let additional = schema_value.get("additionalProperties");
+            assert_eq!(
+                additional,
+                Some(&json!(false)),
+                "tool `{}` input schema must set additionalProperties=false \
+                 (i.e. carry #[serde(deny_unknown_fields)] on its params), got: {schema_value}",
+                tool.name,
+            );
+        }
     }
 
     /// Pin that `tools/list` advertises only the canonical `path` field.
@@ -1611,7 +1746,8 @@ mod tests {
     /// set — this means handlers can always use the same builder.
     #[test]
     fn chrome_main_thread_hotspots_sql_no_filter_runs_all_main_threads() {
-        let sql = chrome_main_thread_hotspots_sql(None, None).expect("builder must succeed");
+        let sql =
+            chrome_main_thread_hotspots_sql(None, None, None, None).expect("builder must succeed");
         assert!(sql.contains("WHERE t.is_main_thread = 1"));
         assert!(sql.contains("AND ct.dur > 16000000"));
         assert!(sql.contains("ORDER BY ct.dur DESC LIMIT 100"));
@@ -1627,7 +1763,7 @@ mod tests {
 
     #[test]
     fn chrome_main_thread_hotspots_sql_with_pid_emits_filter() {
-        let sql = chrome_main_thread_hotspots_sql(None, Some(12800))
+        let sql = chrome_main_thread_hotspots_sql(None, Some(12800), None, None)
             .expect("pid-filter builder must succeed");
         assert!(sql.contains("AND p.pid = 12800"), "got: {sql}");
         assert!(
@@ -1638,7 +1774,7 @@ mod tests {
 
     #[test]
     fn chrome_main_thread_hotspots_sql_with_process_name_emits_filter() {
-        let sql = chrome_main_thread_hotspots_sql(Some("Renderer"), None)
+        let sql = chrome_main_thread_hotspots_sql(Some("Renderer"), None, None, None)
             .expect("name-filter builder must succeed");
         assert!(
             sql.contains("AND ct.process_name = 'Renderer'"),
@@ -1648,13 +1784,124 @@ mod tests {
 
     #[test]
     fn chrome_main_thread_hotspots_sql_with_both_filters_ands_them() {
-        let sql = chrome_main_thread_hotspots_sql(Some("Renderer"), Some(12800))
+        let sql = chrome_main_thread_hotspots_sql(Some("Renderer"), Some(12800), None, None)
             .expect("combined-filter builder must succeed");
         assert!(
             sql.contains("AND ct.process_name = 'Renderer'"),
             "got: {sql}"
         );
         assert!(sql.contains("AND p.pid = 12800"), "got: {sql}");
+    }
+
+    /// `min_dur_ms = 33.0` translates to `ct.dur > 33000000` ns. Default
+    /// (`None`) preserves the legacy 16 ms threshold pinned by the no-filter
+    /// test above.
+    #[test]
+    fn chrome_main_thread_hotspots_sql_with_min_dur_ms_emits_threshold() {
+        let sql = chrome_main_thread_hotspots_sql(None, None, Some(33.0), None)
+            .expect("min_dur_ms builder must succeed");
+        assert!(
+            sql.contains("AND ct.dur > 33000000"),
+            "min_dur_ms must convert ms→ns, got: {sql}",
+        );
+        assert!(
+            !sql.contains("AND ct.dur > 16000000"),
+            "explicit min_dur_ms must replace the 16 ms default, got: {sql}",
+        );
+    }
+
+    /// `min_dur_ms = 0.0` is the explicit "show me everything" path — emits
+    /// `ct.dur > 0` so SQL still runs but only filters out zero-duration rows
+    /// (which `chrome_tasks` shouldn't have anyway).
+    #[test]
+    fn chrome_main_thread_hotspots_sql_with_min_dur_ms_zero_emits_zero_threshold() {
+        let sql = chrome_main_thread_hotspots_sql(None, None, Some(0.0), None)
+            .expect("zero threshold must be accepted");
+        assert!(sql.contains("AND ct.dur > 0"), "got: {sql}");
+    }
+
+    #[test]
+    fn chrome_main_thread_hotspots_sql_rejects_negative_min_dur_ms() {
+        let err = chrome_main_thread_hotspots_sql(None, None, Some(-1.0), None)
+            .expect_err("negative min_dur_ms must error");
+        assert!(
+            err.to_string().contains("min_dur_ms"),
+            "error must mention min_dur_ms, got: {err}",
+        );
+    }
+
+    #[test]
+    fn chrome_main_thread_hotspots_sql_rejects_nan_min_dur_ms() {
+        let err = chrome_main_thread_hotspots_sql(None, None, Some(f64::NAN), None)
+            .expect_err("NaN min_dur_ms must error");
+        assert!(
+            err.to_string().contains("min_dur_ms"),
+            "error must mention min_dur_ms, got: {err}",
+        );
+    }
+
+    /// Pre-fix: `(1e20 * 1e6) as i64` saturates to `i64::MAX`, the SQL ran
+    /// silently with `dur > 9223372036854775807`, and the LLM got an empty
+    /// "good performance" result on a query that was meaningless. Post-fix:
+    /// the overflow guard fires before the cast and surfaces the failure.
+    #[test]
+    fn chrome_main_thread_hotspots_sql_rejects_min_dur_ms_overflowing_i64_ns() {
+        let err = chrome_main_thread_hotspots_sql(None, None, Some(1e20), None)
+            .expect_err("min_dur_ms that overflows i64 ns must error");
+        assert!(
+            err.to_string().contains("min_dur_ms"),
+            "error must mention min_dur_ms, got: {err}",
+        );
+    }
+
+    /// Positive-boundary counterpart to the overflow rejection. `9e12 ms`
+    /// ≈ 285 years sits comfortably under `i64::MAX as f64 / 1e6` ≈ 9.22e12,
+    /// so the guard accepts. Pins that the boundary is set permissively
+    /// enough not to false-reject any real-world threshold.
+    #[test]
+    fn chrome_main_thread_hotspots_sql_accepts_min_dur_ms_just_under_i64_ns_overflow() {
+        let sql = chrome_main_thread_hotspots_sql(None, None, Some(9e12), None)
+            .expect("near-boundary min_dur_ms must accept");
+        assert!(
+            sql.contains("AND ct.dur > 9000000000000000000"),
+            "9e12 ms must convert to 9e18 ns in the WHERE clause, got: {sql}",
+        );
+    }
+
+    #[test]
+    fn chrome_main_thread_hotspots_sql_with_limit_overrides_default() {
+        let sql = chrome_main_thread_hotspots_sql(None, None, None, Some(25))
+            .expect("limit builder must succeed");
+        assert!(
+            sql.contains("ORDER BY ct.dur DESC LIMIT 25"),
+            "explicit limit must replace LIMIT 100 default, got: {sql}",
+        );
+        assert!(
+            !sql.contains("LIMIT 100"),
+            "explicit limit must not coexist with default, got: {sql}",
+        );
+    }
+
+    /// `limit > MAX_ROWS` clamps silently to 5000 — same rationale as
+    /// `execute_sql`'s row cap (don't dump unbounded JSON to the LLM).
+    #[test]
+    fn chrome_main_thread_hotspots_sql_clamps_limit_to_max_rows() {
+        let sql = chrome_main_thread_hotspots_sql(None, None, None, Some(99_999))
+            .expect("oversized limit must clamp, not error");
+        assert!(
+            sql.contains(&format!("LIMIT {MAX_ROWS}")),
+            "limit must clamp to MAX_ROWS={MAX_ROWS}, got: {sql}",
+        );
+    }
+
+    #[test]
+    fn chrome_main_thread_hotspots_sql_rejects_zero_limit() {
+        let err = chrome_main_thread_hotspots_sql(None, None, None, Some(0))
+            .expect_err("limit=0 must error");
+        assert!(
+            err.to_string().contains("limit"),
+            "error must mention limit, got: {err}",
+        );
     }
 
     /// list_threads_in_process now accepts upid OR process_name. With neither
