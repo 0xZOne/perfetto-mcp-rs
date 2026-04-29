@@ -5,3 +5,7 @@
 
 # Local MCP client config (contains absolute paths, not portable)
 .mcp.json
+
+# Brainstorming / writing-plans / executing-plans artifacts — local
+# workflow scratch, not source-of-truth project docs.
+/docs/superpowers/

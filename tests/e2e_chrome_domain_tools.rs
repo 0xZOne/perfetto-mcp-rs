@@ -36,27 +36,27 @@ fn e2e_chrome_scroll_jank_summary_against_fixture() {
         let trace = Path::new("tests/fixtures/scroll_jank.pftrace");
 
         let client = manager.get_client(trace).await.expect("spawn tp_shell");
-        let rows = client
+        let table = client
             .query(CHROME_SCROLL_JANK_SUMMARY_SQL)
             .await
             .expect("chrome scroll jank query must succeed on scroll_jank.pftrace");
 
         assert!(
-            !rows.is_empty(),
+            !table.is_empty(),
             "scroll_jank.pftrace must yield at least one chrome_janky_frames row",
         );
-        for row in &rows {
+        for i in 0..table.len() {
             assert!(
-                row.get("cause_of_jank").is_some(),
-                "row missing cause_of_jank column: {row}",
+                table.cell(i, "cause_of_jank").is_some(),
+                "row {i} missing cause_of_jank column",
             );
             assert!(
-                row.get("delay_since_last_frame").is_some(),
-                "row missing delay_since_last_frame column: {row}",
+                table.cell(i, "delay_since_last_frame").is_some(),
+                "row {i} missing delay_since_last_frame column",
             );
             assert!(
-                row.get("event_latency_id").is_some(),
-                "row missing event_latency_id column: {row}",
+                table.cell(i, "event_latency_id").is_some(),
+                "row {i} missing event_latency_id column",
             );
         }
     });
@@ -74,21 +74,21 @@ fn e2e_chrome_page_load_summary_against_fixture() {
         let trace = Path::new("tests/fixtures/page_loads.pftrace");
 
         let client = manager.get_client(trace).await.expect("spawn tp_shell");
-        let rows = client
+        let table = client
             .query(CHROME_PAGE_LOAD_SUMMARY_SQL)
             .await
             .expect("chrome page load query must succeed on page_loads.pftrace");
 
         assert!(
-            !rows.is_empty(),
+            !table.is_empty(),
             "page_loads.pftrace must yield at least one chrome_page_loads row",
         );
-        for row in &rows {
-            assert!(row.get("id").is_some(), "row missing id column: {row}");
-            assert!(row.get("url").is_some(), "row missing url column: {row}");
+        for i in 0..table.len() {
+            assert!(table.cell(i, "id").is_some(), "row {i} missing id column",);
+            assert!(table.cell(i, "url").is_some(), "row {i} missing url column",);
             assert!(
-                row.get("navigation_start_ts").is_some(),
-                "row missing navigation_start_ts column: {row}",
+                table.cell(i, "navigation_start_ts").is_some(),
+                "row {i} missing navigation_start_ts column",
             );
         }
     });
@@ -112,20 +112,20 @@ fn e2e_chrome_main_thread_hotspots_against_fixture() {
         let trace = Path::new("tests/fixtures/page_loads.pftrace");
 
         let client = manager.get_client(trace).await.expect("spawn tp_shell");
-        let rows = client
+        let table = client
             .query(CHROME_MAIN_THREAD_HOTSPOTS_SQL)
             .await
             .expect("chrome main-thread hotspots query must succeed on page_loads.pftrace");
 
         // Structure check only when rows are present — row count is not asserted.
-        for row in &rows {
-            assert!(row.get("id").is_some(), "row missing id: {row}");
-            assert!(row.get("name").is_some(), "row missing name: {row}");
+        for i in 0..table.len() {
+            assert!(table.cell(i, "id").is_some(), "row {i} missing id");
+            assert!(table.cell(i, "name").is_some(), "row {i} missing name");
             assert!(
-                row.get("thread_name").is_some(),
-                "row missing thread_name: {row}",
+                table.cell(i, "thread_name").is_some(),
+                "row {i} missing thread_name",
             );
-            assert!(row.get("dur_ms").is_some(), "row missing dur_ms: {row}");
+            assert!(table.cell(i, "dur_ms").is_some(), "row {i} missing dur_ms",);
         }
     });
 }
@@ -145,18 +145,18 @@ fn e2e_chrome_startup_summary_sql_runs_cleanly() {
         let trace = Path::new("tests/fixtures/scroll_jank.pftrace");
 
         let client = manager.get_client(trace).await.expect("spawn tp_shell");
-        let rows = client
+        let table = client
             .query(CHROME_STARTUP_SUMMARY_SQL)
             .await
             .expect("chrome startup SQL must resolve against the chrome.startups module");
 
         // Row count not asserted — fixture has no startup data. Field shape
         // verified only when rows exist.
-        for row in &rows {
-            assert!(row.get("name").is_some(), "row missing name: {row}");
+        for i in 0..table.len() {
+            assert!(table.cell(i, "name").is_some(), "row {i} missing name");
             assert!(
-                row.get("startup_duration_ms").is_some(),
-                "row missing startup_duration_ms: {row}",
+                table.cell(i, "startup_duration_ms").is_some(),
+                "row {i} missing startup_duration_ms",
             );
         }
     });
@@ -177,17 +177,17 @@ fn e2e_chrome_web_content_interactions_sql_runs_cleanly() {
         let trace = Path::new("tests/fixtures/scroll_jank.pftrace");
 
         let client = manager.get_client(trace).await.expect("spawn tp_shell");
-        let rows = client
+        let table = client
             .query(CHROME_WEB_CONTENT_INTERACTIONS_SQL)
             .await
             .expect("chrome.web_content_interactions module must resolve");
 
-        for row in &rows {
+        for i in 0..table.len() {
             assert!(
-                row.get("interaction_type").is_some(),
-                "row missing interaction_type: {row}",
+                table.cell(i, "interaction_type").is_some(),
+                "row {i} missing interaction_type",
             );
-            assert!(row.get("dur_ms").is_some(), "row missing dur_ms: {row}");
+            assert!(table.cell(i, "dur_ms").is_some(), "row {i} missing dur_ms",);
         }
     });
 }
@@ -213,14 +213,14 @@ fn e2e_chrome_preflight_distinguishes_chrome_vs_non_chrome() {
             .get_client(non_chrome)
             .await
             .expect("spawn tp_shell");
-        let rows = client
+        let table = client
             .query(CHROME_TRACE_PREFLIGHT_SQL)
             .await
             .expect("preflight SQL must run cleanly");
 
-        let count = rows
-            .first()
-            .and_then(|r| r["n"].as_i64())
+        let count = table
+            .cell(0, "n")
+            .and_then(|v| v.as_i64())
             .expect("preflight must return one integer row");
         assert_eq!(
             count, 0,
@@ -241,14 +241,14 @@ fn e2e_chrome_preflight_distinguishes_chrome_vs_non_chrome() {
             .get_client(chrome_fixture)
             .await
             .expect("spawn tp_shell");
-        let rows = client
+        let table = client
             .query(CHROME_TRACE_PREFLIGHT_SQL)
             .await
             .expect("preflight SQL must run cleanly on a Chrome trace");
 
-        let count = rows
-            .first()
-            .and_then(|r| r["n"].as_i64())
+        let count = table
+            .cell(0, "n")
+            .and_then(|v| v.as_i64())
             .expect("preflight must return one integer row");
         assert!(
             count > 0,

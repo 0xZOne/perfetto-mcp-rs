@@ -4,11 +4,10 @@
 use std::time::Duration;
 
 use prost::Message;
-use serde_json::Value;
 
 use crate::error::PerfettoError;
 use crate::proto::{QueryArgs, QueryResult, StatusResult};
-use crate::query::decode_query_result;
+use crate::query::{decode_query_result, DecodedTable};
 
 /// HTTP client for a single trace_processor_shell RPC instance.
 #[derive(Clone, Debug)]
@@ -30,8 +29,8 @@ impl TraceProcessorClient {
         }
     }
 
-    /// Execute a SQL query and return decoded JSON rows.
-    pub async fn query(&self, sql: &str) -> Result<Vec<Value>, PerfettoError> {
+    /// Execute a SQL query and return the decoded columnar table.
+    pub async fn query(&self, sql: &str) -> Result<DecodedTable, PerfettoError> {
         let args = QueryArgs {
             sql_query: Some(sql.to_owned()),
             tag: None,

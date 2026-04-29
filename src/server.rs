@@ -8,12 +8,13 @@ use rmcp::schemars;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
-    tool, tool_handler, tool_router, ServerHandler, ServiceExt,
+    tool, tool_handler, tool_router, Json, ServerHandler, ServiceExt,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{PerfettoError, QueryErrorKind, MAX_ROWS};
+use crate::query::DecodedTable;
 use crate::tp_manager::{loaded_name_matches, strip_size_suffix, TraceProcessorManager};
 
 /// MCP server providing Perfetto trace analysis tools.
@@ -98,6 +99,34 @@ pub struct ChromeTraceParams {
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct ListStdlibModulesParams {}
+
+/// Output of `list_tables`. Just the matching names; the count is implicit
+/// (`names.len()`).
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct TableList {
+    pub names: Vec<String>,
+}
+
+/// Output of `list_table_structure`. Mirrors the analyst-relevant subset of
+/// SQLite's `PRAGMA table_info`. `cid`, `dflt_value`, and `pk` are omitted
+/// because nothing in the analysis path needs them today; trivial to add
+/// later if a caller surfaces a need.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct TableInfo {
+    pub table: String,
+    pub columns: Vec<ColumnInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ColumnInfo {
+    pub name: String,
+    /// SQLite type name (`INTEGER`, `TEXT`, `REAL`, ...). `#[serde(rename)]`
+    /// because `type` is a reserved word on the Rust side.
+    #[serde(rename = "type")]
+    pub data_type: String,
+    /// Inverse of SQLite's `notnull` flag: `nullable = (notnull == 0)`.
+    pub nullable: bool,
+}
 
 /// Server-level `instructions` shipped on MCP handshake. Lists curated
 /// PerfettoSQL stdlib modules so agents stop hand-rolling `LIKE '%x%'` scans
@@ -355,9 +384,8 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "execute_sql",
-        description = "Execute a PerfettoSQL query against a loaded trace. Returns a JSON \
-                       array of row objects. Results are capped at 5000 rows and \
-                       aggregates are strongly preferred over raw row data.\n\
+        description = "Execute a PerfettoSQL query against a loaded trace. Results are capped \
+                       at 5000 rows and aggregates are strongly preferred over raw row data.\n\
                        \n\
                        The trace_path must reference a previously loaded trace.\n\
                        \n\
@@ -387,32 +415,29 @@ impl PerfettoMcpServer {
     async fn execute_sql(
         &self,
         Parameters(params): Parameters<ExecuteSqlParams>,
-    ) -> Result<String, String> {
+    ) -> Result<Json<DecodedTable>, String> {
         let client = self.client_for(&params.trace_path).await?;
-
-        let rows = client
+        let table = client
             .query(&params.sql)
             .await
             .map_err(format_execute_sql_error)?;
-
-        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
+        Ok(Json(table))
     }
 
     #[tool(
         name = "list_tables",
         description = "List all tables and views available in the loaded trace. Optionally \
-                       filter by a GLOB pattern (e.g. 'chrome_*', 'slice*'). Returns table \
-                       names that can be passed to list_table_structure or used in execute_sql. \
-                       Internal stdlib tables (names starting with `_`) are hidden by \
-                       default; pass an explicit GLOB pattern to bypass the filter. If a \
-                       table you expect based on public samples or documentation is not \
+                       filter by a GLOB pattern (e.g. 'chrome_*', 'slice*'). Internal \
+                       stdlib tables (names starting with `_`) are hidden by default; \
+                       pass an explicit GLOB pattern to bypass the filter. If a table \
+                       you expect based on public samples or documentation is not \
                        appearing, tell the user so they can retry with an explicit \
                        pattern."
     )]
     async fn list_tables(
         &self,
         Parameters(params): Parameters<ListTablesParams>,
-    ) -> Result<String, String> {
+    ) -> Result<Json<TableList>, String> {
         let client = self.client_for(&params.trace_path).await?;
 
         let sql = match &params.pattern {
@@ -433,73 +458,79 @@ impl PerfettoMcpServer {
                 .to_owned(),
         };
 
-        let rows = client
+        let table = client
             .query(&sql)
             .await
             .map_err(|e| format!("Failed to list tables: {e}"))?;
 
-        let names: Vec<&str> = rows
-            .iter()
-            .filter_map(|r| r.get("name").and_then(|v| v.as_str()))
-            .collect();
+        // SQLite guarantees `sqlite_master.name` is TEXT NOT NULL; surface a
+        // non-string as an error rather than silently dropping the row — that
+        // would indicate decoder / trace_processor drift worth telling the
+        // caller about now that `outputSchema` advertises `names: Vec<String>`.
+        let names = table
+            .rows
+            .into_iter()
+            .map(|row| match row.into_iter().next() {
+                Some(serde_json::Value::String(s)) => Ok(s),
+                other => Err(format!(
+                    "Failed to list tables: sqlite_master.name expected TEXT, got {other:?}"
+                )),
+            })
+            .collect::<Result<Vec<_>, String>>()?;
 
-        Ok(format!(
-            "Found {} tables/views:\n{}",
-            names.len(),
-            names.join("\n")
-        ))
+        Ok(Json(TableList { names }))
     }
 
     #[tool(
         name = "list_table_structure",
-        description = "Show the column names and types for a specific table or view. \
-                       Use this to understand the schema before writing SQL queries."
+        description = "Show the column names, types, and nullability for a specific \
+                       table or view. Use this to understand the schema before writing \
+                       SQL queries."
     )]
     async fn list_table_structure(
         &self,
         Parameters(params): Parameters<TableStructureParams>,
-    ) -> Result<String, String> {
+    ) -> Result<Json<TableInfo>, String> {
         let client = self.client_for(&params.trace_path).await?;
-        let table = sanitize_glob_param(&params.table_name).map_err(|e| e.to_string())?;
+        let table_name = sanitize_glob_param(&params.table_name).map_err(|e| e.to_string())?;
 
-        let sql = format!("PRAGMA table_info('{table}')");
-        let rows = client
+        let sql = format!("PRAGMA table_info('{table_name}')");
+        let pragma = client
             .query(&sql)
             .await
             .map_err(|e| format!("Failed to get table structure: {e}"))?;
 
-        if rows.is_empty() {
-            return Err(format!("Table '{table}' not found or has no columns."));
+        if pragma.is_empty() {
+            return Err(format!("Table '{table_name}' not found or has no columns."));
         }
 
-        let mut output = format!("Table: {table}\n\nColumns:\n");
-        for row in &rows {
-            let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-            let col_type = row.get("type").and_then(|v| v.as_str()).unwrap_or("?");
-            let notnull = row.get("notnull").and_then(|v| v.as_i64()).unwrap_or(0);
-            let nullable = if notnull == 0 { " (nullable)" } else { "" };
-            output.push_str(&format!("  {name}: {col_type}{nullable}\n"));
-        }
-        Ok(output)
+        let columns = (0..pragma.len())
+            .map(|i| pragma_row_to_column_info(&pragma, i))
+            .collect::<Result<Vec<_>, String>>()?;
+
+        Ok(Json(TableInfo {
+            table: table_name,
+            columns,
+        }))
     }
 
     #[tool(
         name = "list_processes",
         description = "List all processes in the loaded trace with upid, pid, name, \
-                       start_ts, and end_ts. A good starting point for Android and Linux \
-                       trace analysis — pick a process by name, then call \
+                       start_ts, and end_ts. A good starting point for Android and \
+                       Linux trace analysis — pick a process by name, then call \
                        list_threads_in_process to drill down."
     )]
     async fn list_processes(
         &self,
         Parameters(params): Parameters<ListProcessesParams>,
-    ) -> Result<String, String> {
+    ) -> Result<Json<DecodedTable>, String> {
         let client = self.client_for(&params.trace_path).await?;
-        let rows = client
+        let table = client
             .query("SELECT upid, pid, name, start_ts, end_ts FROM process ORDER BY start_ts")
             .await
             .map_err(|e| format!("Failed to list processes: {e}"))?;
-        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
+        Ok(Json(table))
     }
 
     #[tool(
@@ -513,7 +544,7 @@ impl PerfettoMcpServer {
     async fn list_threads_in_process(
         &self,
         Parameters(params): Parameters<ListThreadsInProcessParams>,
-    ) -> Result<String, String> {
+    ) -> Result<Json<DecodedTable>, String> {
         let client = self.client_for(&params.trace_path).await?;
         let name_lit = sql_string_literal(&params.process_name).map_err(|e| e.to_string())?;
         // LIMIT keeps us clear of the 5000-row hard cap on Chrome renderer-fork
@@ -526,18 +557,18 @@ impl PerfettoMcpServer {
              ORDER BY p.pid, t.tid \
              LIMIT 2000"
         );
-        let rows = client
+        let table = client
             .query(&sql)
             .await
             .map_err(|e| format!("Failed to list threads: {e}"))?;
-        if rows.is_empty() {
+        if table.is_empty() {
             return Err(format!(
                 "No threads found for process name {:?}. Call list_processes \
                  to see available process names.",
                 params.process_name
             ));
         }
-        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
+        Ok(Json(table))
     }
 
     #[tool(
@@ -545,21 +576,20 @@ impl PerfettoMcpServer {
         description = "Return the worst scroll jank frames in a Chrome trace — one row per \
                        janky frame, sorted by delay_since_last_frame DESC (limit 100). \
                        Columns: cause_of_jank, sub_cause_of_jank, delay_since_last_frame, \
-                       event_latency_id, scroll_id, vsync_interval. Row-level data lets \
-                       agents group, filter, and correlate further. Uses \
+                       event_latency_id, scroll_id, vsync_interval. Uses \
                        chrome.scroll_jank.scroll_jank_v3. Chrome traces only."
     )]
     async fn chrome_scroll_jank_summary(
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<String, String> {
+    ) -> Result<Json<DecodedTable>, String> {
         let client = self.client_for(&params.trace_path).await?;
         ensure_chrome_trace(&client, "Chrome scroll jank summary").await?;
-        let rows = client
+        let table = client
             .query(CHROME_SCROLL_JANK_SUMMARY_SQL)
             .await
             .map_err(|e| format_chrome_tool_error("Chrome scroll jank summary", e))?;
-        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
+        Ok(Json(table))
     }
 
     #[tool(
@@ -571,26 +601,25 @@ impl PerfettoMcpServer {
     async fn chrome_page_load_summary(
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<String, String> {
+    ) -> Result<Json<DecodedTable>, String> {
         let client = self.client_for(&params.trace_path).await?;
         ensure_chrome_trace(&client, "Chrome page load summary").await?;
-        let rows = client
+        let table = client
             .query(CHROME_PAGE_LOAD_SUMMARY_SQL)
             .await
             .map_err(|e| format_chrome_tool_error("Chrome page load summary", e))?;
-        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
+        Ok(Json(table))
     }
 
     #[tool(
         name = "chrome_main_thread_hotspots",
         description = "Top Chrome main-thread tasks by wall duration (threshold 16 ms). \
                        Uses thread.is_main_thread = 1 (tid == pid per Linux convention) \
-                       to identify main threads. Returns a JSON array of rows with id, \
-                       name, task_type, thread_name, process_name, dur_ms, cpu_pct \
-                       (thread_dur/dur), thread_dur_ms. Uses chrome.tasks. Chrome \
-                       traces only.\n\
+                       to identify main threads. Columns: id, name, task_type, \
+                       thread_name, process_name, dur_ms, cpu_pct (thread_dur/dur), \
+                       thread_dur_ms. Uses chrome.tasks. Chrome traces only.\n\
                        \n\
-                       An empty array means either all main-thread tasks stayed under \
+                       Empty `rows` means either all main-thread tasks stayed under \
                        the 16 ms frame budget (good performance), or thread metadata \
                        is incomplete (is_main_thread is NULL). If the latter is \
                        suspected, retry with execute_sql filtering on thread_name IN \
@@ -600,34 +629,34 @@ impl PerfettoMcpServer {
     async fn chrome_main_thread_hotspots(
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<String, String> {
+    ) -> Result<Json<DecodedTable>, String> {
         let client = self.client_for(&params.trace_path).await?;
         ensure_chrome_trace(&client, "Chrome main-thread hotspots").await?;
-        let rows = client
+        let table = client
             .query(CHROME_MAIN_THREAD_HOTSPOTS_SQL)
             .await
             .map_err(|e| format_chrome_tool_error("Chrome main-thread hotspots", e))?;
-        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
+        Ok(Json(table))
     }
 
     #[tool(
         name = "chrome_startup_summary",
         description = "Summarize Chrome browser startup events: id, name, launch_cause, \
                        startup_duration_ms (first_visible_content_ts - startup_begin_ts), \
-                       browser_upid. Uses chrome.startups. Chrome traces only. Returns \
-                       a JSON array; empty if no startup data was captured."
+                       browser_upid. Uses chrome.startups. Chrome traces only. Empty \
+                       `rows` if no startup data was captured."
     )]
     async fn chrome_startup_summary(
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<String, String> {
+    ) -> Result<Json<DecodedTable>, String> {
         let client = self.client_for(&params.trace_path).await?;
         ensure_chrome_trace(&client, "Chrome startup summary").await?;
-        let rows = client
+        let table = client
             .query(CHROME_STARTUP_SUMMARY_SQL)
             .await
             .map_err(|e| format_chrome_tool_error("Chrome startup summary", e))?;
-        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
+        Ok(Json(table))
     }
 
     #[tool(
@@ -641,14 +670,14 @@ impl PerfettoMcpServer {
     async fn chrome_web_content_interactions(
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<String, String> {
+    ) -> Result<Json<DecodedTable>, String> {
         let client = self.client_for(&params.trace_path).await?;
         ensure_chrome_trace(&client, "Chrome web content interactions").await?;
-        let rows = client
+        let table = client
             .query(CHROME_WEB_CONTENT_INTERACTIONS_SQL)
             .await
             .map_err(|e| format_chrome_tool_error("Chrome web content interactions", e))?;
-        serde_json::to_string_pretty(&rows).map_err(|e| format!("Failed to serialize results: {e}"))
+        Ok(Json(table))
     }
 
     #[tool(
@@ -769,14 +798,11 @@ async fn ensure_chrome_trace(
     client: &crate::tp_client::TraceProcessorClient,
     tool_label: &str,
 ) -> Result<(), String> {
-    let rows = client
+    let table = client
         .query(CHROME_TRACE_PREFLIGHT_SQL)
         .await
         .map_err(|e| format!("{tool_label}: preflight check failed: {e}"))?;
-    let has_chrome = rows
-        .first()
-        .and_then(|r| r.get("n").and_then(|v| v.as_i64()))
-        .unwrap_or(0);
+    let has_chrome = table.cell(0, "n").and_then(|v| v.as_i64()).unwrap_or(0);
     if has_chrome == 0 {
         return Err(format!(
             "{tool_label} requires a Chrome-family trace, but no \
@@ -786,6 +812,40 @@ async fn ensure_chrome_trace(
         ));
     }
     Ok(())
+}
+
+/// Project one row of a `PRAGMA table_info('foo')` result into a typed
+/// `ColumnInfo`. Surfaces missing `name` / `type` columns as errors —
+/// SQLite's PRAGMA contract guarantees them, so absence indicates upstream
+/// decoder or trace_processor drift worth surfacing rather than silently
+/// rendering a placeholder. `notnull` defaults to 0 (= `nullable: true`)
+/// because exotic vtables can legitimately produce NULL there, and
+/// "nullable until proven otherwise" is the conservative read.
+fn pragma_row_to_column_info(table: &DecodedTable, i: usize) -> Result<ColumnInfo, String> {
+    let name = table
+        .cell(i, "name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            format!("PRAGMA table_info row {i} missing `name` column — SQLite contract violation")
+        })?
+        .to_owned();
+    let data_type = table
+        .cell(i, "type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            format!("PRAGMA table_info row {i} missing `type` column — SQLite contract violation")
+        })?
+        .to_owned();
+    let nullable = table
+        .cell(i, "notnull")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0)
+        == 0;
+    Ok(ColumnInfo {
+        name,
+        data_type,
+        nullable,
+    })
 }
 
 /// Validate a string for use in SQL GLOB patterns or table names.
@@ -840,6 +900,7 @@ fn format_loaded_trace_display(trace_path: &str, loaded_trace_name: Option<&[u8]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::path::PathBuf;
 
     #[test]
@@ -1263,31 +1324,41 @@ mod tests {
             };
 
             let r = server.chrome_scroll_jank_summary(mk_params()).await;
-            let err = r.expect_err("chrome_scroll_jank_summary: preflight must reject");
+            let err = r
+                .map(|_| ())
+                .expect_err("chrome_scroll_jank_summary: preflight must reject");
             assert!(err.contains("Chrome scroll jank summary"), "got: {err}");
             assert!(err.contains("Chrome-family trace"), "got: {err}");
             assert!(err.contains("list_stdlib_modules"), "got: {err}");
 
             let r = server.chrome_page_load_summary(mk_params()).await;
-            let err = r.expect_err("chrome_page_load_summary: preflight must reject");
+            let err = r
+                .map(|_| ())
+                .expect_err("chrome_page_load_summary: preflight must reject");
             assert!(err.contains("Chrome page load summary"), "got: {err}");
             assert!(err.contains("Chrome-family trace"), "got: {err}");
             assert!(err.contains("list_stdlib_modules"), "got: {err}");
 
             let r = server.chrome_main_thread_hotspots(mk_params()).await;
-            let err = r.expect_err("chrome_main_thread_hotspots: preflight must reject");
+            let err = r
+                .map(|_| ())
+                .expect_err("chrome_main_thread_hotspots: preflight must reject");
             assert!(err.contains("Chrome main-thread hotspots"), "got: {err}");
             assert!(err.contains("Chrome-family trace"), "got: {err}");
             assert!(err.contains("list_stdlib_modules"), "got: {err}");
 
             let r = server.chrome_startup_summary(mk_params()).await;
-            let err = r.expect_err("chrome_startup_summary: preflight must reject");
+            let err = r
+                .map(|_| ())
+                .expect_err("chrome_startup_summary: preflight must reject");
             assert!(err.contains("Chrome startup summary"), "got: {err}");
             assert!(err.contains("Chrome-family trace"), "got: {err}");
             assert!(err.contains("list_stdlib_modules"), "got: {err}");
 
             let r = server.chrome_web_content_interactions(mk_params()).await;
-            let err = r.expect_err("chrome_web_content_interactions: preflight must reject");
+            let err = r
+                .map(|_| ())
+                .expect_err("chrome_web_content_interactions: preflight must reject");
             assert!(
                 err.contains("Chrome web content interactions"),
                 "got: {err}"
@@ -1295,5 +1366,217 @@ mod tests {
             assert!(err.contains("Chrome-family trace"), "got: {err}");
             assert!(err.contains("list_stdlib_modules"), "got: {err}");
         });
+    }
+
+    /// Regression net: the format parameter and SqlResultFormat enum were
+    /// removed; description must not silently drift back in.
+    #[test]
+    fn execute_sql_description_does_not_mention_format_param() {
+        let server = test_server();
+        let tool = server
+            .tool_router
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == "execute_sql")
+            .expect("execute_sql tool must exist");
+        let desc = tool.description.as_deref().unwrap_or("");
+        assert!(
+            !desc.contains("format"),
+            "execute_sql description must not mention `format` parameter, got: {desc}",
+        );
+    }
+
+    /// Pin the description trim — `outputSchema` carries the shape now,
+    /// so the literal columnar layout sample must NOT appear in prose.
+    #[test]
+    fn execute_sql_description_does_not_spell_out_columnar_shape() {
+        let server = test_server();
+        let tool = server
+            .tool_router
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == "execute_sql")
+            .expect("execute_sql tool must exist");
+        let desc = tool.description.as_deref().unwrap_or("");
+        assert!(
+            !desc.contains("{columns:"),
+            "execute_sql description must not spell out the columnar shape, got: {desc}",
+        );
+    }
+
+    /// 10 of the 12 tools return data via `Json<T>` and must carry an
+    /// outputSchema; `load_trace` returns a text confirmation and
+    /// `list_stdlib_modules` returns a JSON-encoded String — neither
+    /// flows through the `Json<T>` schema-derivation path, so both
+    /// must have `output_schema = None`.
+    #[test]
+    fn output_schema_present_on_data_returning_tools() {
+        let server = test_server();
+        let tools = server.tool_router.list_all();
+        for name in [
+            "execute_sql",
+            "list_processes",
+            "list_threads_in_process",
+            "chrome_scroll_jank_summary",
+            "chrome_page_load_summary",
+            "chrome_main_thread_hotspots",
+            "chrome_startup_summary",
+            "chrome_web_content_interactions",
+            "list_tables",
+            "list_table_structure",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("tool {name} must exist"));
+            assert!(
+                tool.output_schema.is_some(),
+                "tool {name} must carry an outputSchema (Result<Json<T>, _> return)",
+            );
+        }
+        for name in ["load_trace", "list_stdlib_modules"] {
+            let tool = tools
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("tool {name} must exist"));
+            assert!(
+                tool.output_schema.is_none(),
+                "tool {name} returns plain String and must not carry an outputSchema",
+            );
+        }
+    }
+
+    /// Every tabular tool returns Json<DecodedTable>; their outputSchemas
+    /// must be the same value. Catches accidental shape drift if a tool
+    /// is later moved to a custom return type.
+    #[test]
+    fn output_schema_shape_for_tabular_tools_matches_decoded_table() {
+        let server = test_server();
+        let tools = server.tool_router.list_all();
+        let expected = tools
+            .iter()
+            .find(|t| t.name == "execute_sql")
+            .and_then(|t| t.output_schema.as_ref())
+            .expect("execute_sql must have an outputSchema for the comparison anchor")
+            .clone();
+        for name in [
+            "list_processes",
+            "list_threads_in_process",
+            "chrome_scroll_jank_summary",
+            "chrome_page_load_summary",
+            "chrome_main_thread_hotspots",
+            "chrome_startup_summary",
+            "chrome_web_content_interactions",
+        ] {
+            let actual = tools
+                .iter()
+                .find(|t| t.name == name)
+                .and_then(|t| t.output_schema.as_ref())
+                .unwrap_or_else(|| panic!("tool {name} must have outputSchema"));
+            assert_eq!(
+                **actual, *expected,
+                "tabular tool {name} schema diverged from execute_sql's",
+            );
+        }
+    }
+
+    #[test]
+    fn table_list_serialize_shape() {
+        let list = TableList {
+            names: vec!["t1".into(), "t2".into()],
+        };
+        let value = serde_json::to_value(&list).expect("serialize");
+        assert_eq!(value, json!({"names": ["t1", "t2"]}));
+    }
+
+    #[test]
+    fn table_info_serialize_uses_renamed_type_field() {
+        let info = TableInfo {
+            table: "thread_slice".into(),
+            columns: vec![ColumnInfo {
+                name: "id".into(),
+                data_type: "INTEGER".into(),
+                nullable: false,
+            }],
+        };
+        let value = serde_json::to_value(&info).expect("serialize");
+        assert_eq!(
+            value,
+            json!({
+                "table": "thread_slice",
+                "columns": [{"name": "id", "type": "INTEGER", "nullable": false}],
+            }),
+            "ColumnInfo.data_type must serialize as `type` (serde rename)",
+        );
+    }
+
+    /// PRAGMA table_info returns notnull = 0 for nullable, 1 for NOT NULL.
+    /// `pragma_row_to_column_info` inverts that into a bool. Pin the inversion
+    /// so no one flips the polarity by mistake. Calls the production helper
+    /// directly so the test cannot drift away from the real projection logic.
+    #[test]
+    fn pragma_row_to_column_info_inverts_notnull() {
+        let pragma = DecodedTable {
+            columns: vec!["name".into(), "type".into(), "notnull".into()],
+            rows: vec![
+                vec![
+                    serde_json::Value::from("a"),
+                    serde_json::Value::from("INTEGER"),
+                    serde_json::Value::from(0),
+                ],
+                vec![
+                    serde_json::Value::from("b"),
+                    serde_json::Value::from("TEXT"),
+                    serde_json::Value::from(1),
+                ],
+            ],
+        };
+        let nullable_row = pragma_row_to_column_info(&pragma, 0).expect("row 0 valid");
+        let not_null_row = pragma_row_to_column_info(&pragma, 1).expect("row 1 valid");
+        assert_eq!(nullable_row.name, "a");
+        assert_eq!(nullable_row.data_type, "INTEGER");
+        assert!(
+            nullable_row.nullable,
+            "notnull = 0 must yield nullable = true",
+        );
+        assert_eq!(not_null_row.name, "b");
+        assert_eq!(not_null_row.data_type, "TEXT");
+        assert!(
+            !not_null_row.nullable,
+            "notnull = 1 must yield nullable = false",
+        );
+    }
+
+    /// PRAGMA contract violations (missing `name` or `type`) must surface as
+    /// errors rather than silently producing a `"?"` placeholder. The
+    /// pre-v0.9.x code used `unwrap_or("?")` which made an upstream decoder
+    /// or trace_processor regression invisible at the tool boundary.
+    #[test]
+    fn pragma_row_to_column_info_errors_on_missing_name() {
+        let pragma = DecodedTable {
+            columns: vec!["type".into(), "notnull".into()],
+            rows: vec![vec![
+                serde_json::Value::from("INTEGER"),
+                serde_json::Value::from(0),
+            ]],
+        };
+        let err = pragma_row_to_column_info(&pragma, 0)
+            .expect_err("missing `name` column must surface as error");
+        assert!(err.contains("missing `name` column"), "got: {err}");
+        assert!(err.contains("contract violation"), "got: {err}");
+    }
+
+    #[test]
+    fn pragma_row_to_column_info_errors_on_missing_type() {
+        let pragma = DecodedTable {
+            columns: vec!["name".into(), "notnull".into()],
+            rows: vec![vec![
+                serde_json::Value::from("a"),
+                serde_json::Value::from(0),
+            ]],
+        };
+        let err = pragma_row_to_column_info(&pragma, 0)
+            .expect_err("missing `type` column must surface as error");
+        assert!(err.contains("missing `type` column"), "got: {err}");
     }
 }

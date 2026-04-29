@@ -1,17 +1,59 @@
 // Copyright 2025 The perfetto-mcp-rs Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use rmcp::schemars;
+use schemars::JsonSchema;
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::error::{PerfettoError, QueryErrorKind, MAX_ROWS};
 use crate::proto::query_result::cells_batch::CellType;
 use crate::proto::QueryResult;
 
-/// Decode a protobuf QueryResult into a Vec of JSON rows.
+/// A decoded SQL result in columnar form.
 ///
-/// Each row is a JSON object mapping column names to values.
+/// `columns` carries the SELECT-clause column names in their original order
+/// (sourced directly from `proto.column_names`); each entry of `rows` is one
+/// data row whose values align positionally with `columns`. This type is the
+/// single boundary for query results — it serializes to the wire shape
+/// `{"columns": [...], "rows": [[...], ...]}` and is what every JSON-emitting
+/// MCP tool returns inside `rmcp::Json<...>`.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct DecodedTable {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Value>>,
+}
+
+impl DecodedTable {
+    /// Number of data rows (not including the column header).
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// True iff `len() == 0`.
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// Look up a cell by row index and column name. Returns `None` when
+    /// either index is out of range or the column does not exist.
+    /// Linear scan over `columns` — fine at the column counts we see
+    /// (typically <=20). Avoids a per-instance `HashMap` that would matter
+    /// on max-size (5000-row) results.
+    pub fn cell(&self, row: usize, col: &str) -> Option<&Value> {
+        let idx = self.columns.iter().position(|c| c == col)?;
+        self.rows.get(row)?.get(idx)
+    }
+}
+
+/// Decode a protobuf QueryResult into a columnar `DecodedTable`.
+///
+/// `columns` is taken straight from `result.column_names` — the
+/// SELECT-clause order is preserved, no alphabetization. Each row is a
+/// `Vec<Value>` whose entries align positionally with `columns`.
+///
 /// Returns early with `TooManyRows` if the result exceeds `MAX_ROWS`.
-pub fn decode_query_result(result: &QueryResult) -> Result<Vec<Value>, PerfettoError> {
+pub fn decode_query_result(result: &QueryResult) -> Result<DecodedTable, PerfettoError> {
     if let Some(ref err) = result.error {
         if !err.is_empty() {
             return Err(PerfettoError::QueryError {
@@ -21,13 +63,16 @@ pub fn decode_query_result(result: &QueryResult) -> Result<Vec<Value>, PerfettoE
         }
     }
 
-    let columns = &result.column_names;
+    let columns: Vec<String> = result.column_names.clone();
     let num_cols = columns.len();
     if num_cols == 0 {
-        return Ok(Vec::new());
+        return Ok(DecodedTable {
+            columns,
+            rows: Vec::new(),
+        });
     }
 
-    let mut rows: Vec<Value> = Vec::new();
+    let mut rows: Vec<Vec<Value>> = Vec::new();
 
     for batch in &result.batch {
         let mut varint_iter = batch.varint_cells.iter();
@@ -36,10 +81,9 @@ pub fn decode_query_result(result: &QueryResult) -> Result<Vec<Value>, PerfettoE
         let mut string_iter = batch.string_cells.as_deref().unwrap_or("").split('\0');
 
         let mut col_idx: usize = 0;
-        let mut current_row = serde_json::Map::with_capacity(num_cols);
+        let mut current_row: Vec<Value> = Vec::with_capacity(num_cols);
 
         for &cell_type_raw in &batch.cells {
-            let col_name = &columns[col_idx];
             let value = match CellType::try_from(cell_type_raw) {
                 Ok(CellType::CellNull) | Ok(CellType::CellInvalid) => Value::Null,
                 Ok(CellType::CellVarint) => {
@@ -62,12 +106,14 @@ pub fn decode_query_result(result: &QueryResult) -> Result<Vec<Value>, PerfettoE
                 Err(_) => Value::Null,
             };
 
-            current_row.insert(col_name.clone(), value);
+            current_row.push(value);
             col_idx += 1;
 
             if col_idx == num_cols {
-                rows.push(Value::Object(current_row));
-                current_row = serde_json::Map::with_capacity(num_cols);
+                rows.push(std::mem::replace(
+                    &mut current_row,
+                    Vec::with_capacity(num_cols),
+                ));
                 col_idx = 0;
 
                 if rows.len() > MAX_ROWS {
@@ -77,7 +123,7 @@ pub fn decode_query_result(result: &QueryResult) -> Result<Vec<Value>, PerfettoE
         }
     }
 
-    Ok(rows)
+    Ok(DecodedTable { columns, rows })
 }
 
 #[cfg(test)]
@@ -115,15 +161,18 @@ mod tests {
             is_last_batch: Some(true),
         };
         let result = make_result(vec!["name", "count", "value"], vec![batch]);
-        let rows = decode_query_result(&result).unwrap();
+        let table = decode_query_result(&result).unwrap();
 
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0]["name"], "hello");
-        assert_eq!(rows[0]["count"], 42);
-        assert_eq!(rows[0]["value"], 1.5);
-        assert_eq!(rows[1]["name"], "world");
-        assert_eq!(rows[1]["count"], 99);
-        assert_eq!(rows[1]["value"], 2.5);
+        assert_eq!(table.columns, vec!["name", "count", "value"]);
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(
+            table.rows[0],
+            vec![Value::from("hello"), Value::from(42), Value::from(1.5)]
+        );
+        assert_eq!(
+            table.rows[1],
+            vec![Value::from("world"), Value::from(99), Value::from(2.5)]
+        );
     }
 
     #[test]
@@ -137,18 +186,20 @@ mod tests {
             is_last_batch: Some(true),
         };
         let result = make_result(vec!["name", "value"], vec![batch]);
-        let rows = decode_query_result(&result).unwrap();
+        let table = decode_query_result(&result).unwrap();
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["name"], "hello");
-        assert!(rows[0]["value"].is_null());
+        assert_eq!(table.columns, vec!["name", "value"]);
+        assert_eq!(table.rows.len(), 1);
+        assert_eq!(table.rows[0][0], Value::from("hello"));
+        assert!(table.rows[0][1].is_null());
     }
 
     #[test]
     fn decode_empty_result() {
         let result = make_result(vec![], vec![]);
-        let rows = decode_query_result(&result).unwrap();
-        assert!(rows.is_empty());
+        let table = decode_query_result(&result).unwrap();
+        assert!(table.columns.is_empty());
+        assert!(table.rows.is_empty());
     }
 
     #[test]
@@ -198,7 +249,6 @@ mod tests {
 
     #[test]
     fn decode_multi_batch() {
-        // 2 batches, 2 columns, 3 rows total (2 in first batch, 1 in second).
         let batch1 = CellsBatch {
             cells: vec![
                 CellType::CellVarint as i32,
@@ -221,14 +271,117 @@ mod tests {
             is_last_batch: Some(true),
         };
         let result = make_result(vec!["id", "name"], vec![batch1, batch2]);
-        let rows = decode_query_result(&result).unwrap();
+        let table = decode_query_result(&result).unwrap();
 
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0]["id"], 1);
-        assert_eq!(rows[0]["name"], "a");
-        assert_eq!(rows[1]["id"], 2);
-        assert_eq!(rows[1]["name"], "b");
-        assert_eq!(rows[2]["id"], 3);
-        assert_eq!(rows[2]["name"], "c");
+        assert_eq!(table.columns, vec!["id", "name"]);
+        assert_eq!(table.rows.len(), 3);
+        assert_eq!(table.rows[0], vec![Value::from(1), Value::from("a")]);
+        assert_eq!(table.rows[1], vec![Value::from(2), Value::from("b")]);
+        assert_eq!(table.rows[2], vec![Value::from(3), Value::from("c")]);
+    }
+
+    #[test]
+    fn decoded_table_len_and_is_empty() {
+        let empty = DecodedTable {
+            columns: vec![],
+            rows: vec![],
+        };
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+
+        let two = DecodedTable {
+            columns: vec!["a".into()],
+            rows: vec![vec![Value::from(1)], vec![Value::from(2)]],
+        };
+        assert!(!two.is_empty());
+        assert_eq!(two.len(), 2);
+    }
+
+    #[test]
+    fn cell_lookup_finds_value_by_column_name() {
+        let table = DecodedTable {
+            columns: vec!["a".into(), "b".into()],
+            rows: vec![vec![Value::from(1), Value::String("x".into())]],
+        };
+        assert_eq!(table.cell(0, "a"), Some(&Value::from(1)));
+        assert_eq!(table.cell(0, "b"), Some(&Value::String("x".into())));
+    }
+
+    #[test]
+    fn cell_lookup_returns_none_for_unknown_column() {
+        let table = DecodedTable {
+            columns: vec!["a".into()],
+            rows: vec![vec![Value::from(1)]],
+        };
+        assert!(table.cell(0, "missing").is_none());
+    }
+
+    #[test]
+    fn cell_lookup_returns_none_for_out_of_range_row() {
+        let table = DecodedTable {
+            columns: vec!["a".into()],
+            rows: vec![vec![Value::from(1)]],
+        };
+        assert!(table.cell(99, "a").is_none());
+    }
+
+    #[test]
+    fn serialize_emits_canonical_columnar_shape() {
+        let table = DecodedTable {
+            columns: vec!["a".into(), "b".into()],
+            rows: vec![
+                vec![Value::from(1), Value::String("x".into())],
+                vec![Value::from(2), Value::String("y".into())],
+            ],
+        };
+        let value = serde_json::to_value(&table).expect("serialize");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "columns": ["a", "b"],
+                "rows": [[1, "x"], [2, "y"]],
+            }),
+        );
+    }
+
+    #[test]
+    fn serialize_on_empty_table_emits_empty_columns_and_rows() {
+        let table = DecodedTable {
+            columns: vec![],
+            rows: vec![],
+        };
+        let value = serde_json::to_value(&table).expect("serialize");
+        assert_eq!(value, serde_json::json!({"columns": [], "rows": []}));
+    }
+
+    /// `decode_query_result` must preserve `proto.column_names` order
+    /// verbatim — no alphabetization. Locks in the SELECT-clause-order
+    /// behavior introduced by this refactor.
+    #[test]
+    fn decode_preserves_proto_column_order() {
+        let batch = CellsBatch {
+            cells: vec![
+                CellType::CellVarint as i32,
+                CellType::CellVarint as i32,
+                CellType::CellVarint as i32,
+            ],
+            varint_cells: vec![10, 20, 30],
+            float64_cells: vec![],
+            blob_cells: vec![],
+            string_cells: None,
+            is_last_batch: Some(true),
+        };
+        // Deliberately non-alphabetical column order.
+        let result = make_result(vec!["c", "a", "b"], vec![batch]);
+        let table = decode_query_result(&result).unwrap();
+        assert_eq!(
+            table.columns,
+            vec!["c", "a", "b"],
+            "decode_query_result must preserve proto.column_names verbatim",
+        );
+        assert_eq!(
+            table.rows[0],
+            vec![Value::from(10), Value::from(20), Value::from(30)]
+        );
     }
 }

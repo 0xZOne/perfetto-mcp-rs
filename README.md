@@ -135,7 +135,7 @@ it in place.
 | `load_trace` | Open a `.perfetto-trace` / `.pftrace` file (must be called first) |
 | `list_tables` | List tables/views in the loaded trace, optional GLOB filter |
 | `list_table_structure` | Show column names and types for a table |
-| `execute_sql` | Run a PerfettoSQL query, returns JSON rows (max 5000) |
+| `execute_sql` | Run a PerfettoSQL query, returns columnar JSON `{columns, rows}` (max 5000 rows) |
 | `list_processes` | List processes in the trace (pid, name, start/end timestamps) |
 | `list_threads_in_process` | List threads under a process name (up to 2000) |
 | `chrome_scroll_jank_summary` | Worst janky frames with cause, sub-cause, delay_since_last_frame (Chrome trace) |

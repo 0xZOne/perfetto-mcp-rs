@@ -36,33 +36,49 @@ fn e2e_smoke_real_trace_round_trip() {
             "status should report a loaded trace",
         );
 
-        let count_rows = client
+        let count_table = client
             .query("SELECT COUNT(*) AS n FROM process")
             .await
             .expect("count process");
-        assert_eq!(count_rows.len(), 1);
+        assert_eq!(count_table.len(), 1);
         assert!(
-            count_rows[0]["n"].as_i64().is_some(),
+            count_table.cell(0, "n").and_then(|v| v.as_i64()).is_some(),
             "COUNT cell should decode as i64",
         );
 
-        let bigint_rows = client
+        let bigint_table = client
             .query("SELECT 9007199254740993 AS big")
             .await
             .expect("bigint query");
         assert_eq!(
-            bigint_rows[0]["big"].as_i64(),
+            bigint_table.cell(0, "big").and_then(|v| v.as_i64()),
             Some(9007199254740993),
             "i64 above 2^53 must survive decode without f64 rounding",
         );
 
-        let pragma_rows = client
+        let pragma_table = client
             .query("PRAGMA table_info('process')")
             .await
             .expect("pragma query");
         assert!(
-            !pragma_rows.is_empty(),
+            !pragma_table.is_empty(),
             "PRAGMA table_info returned no rows; schema decode path broken?",
+        );
+
+        // Pin: the decoder must preserve proto.column_names ordering, NOT
+        // alphabetize. Catches anyone reintroducing a BTreeMap intermediate.
+        let reordered = client
+            .query("SELECT 2 AS b, 1 AS a, 3 AS c")
+            .await
+            .expect("reorder query");
+        assert_eq!(reordered.columns, vec!["b", "a", "c"]);
+        assert_eq!(
+            reordered.rows[0],
+            vec![
+                serde_json::Value::from(2),
+                serde_json::Value::from(1),
+                serde_json::Value::from(3),
+            ],
         );
 
         let missing_table_err = client.query("SELECT * FROM nonexistent_xyz").await;

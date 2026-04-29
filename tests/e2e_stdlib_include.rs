@@ -31,7 +31,7 @@ fn e2e_stdlib_include_basic_trace() {
 
         let client = manager.get_client(trace).await.expect("spawn tp_shell");
 
-        let rows = client
+        let table = client
             .query(
                 "INCLUDE PERFETTO MODULE slices.with_context; \
                  SELECT COUNT(*) AS n FROM thread_slice",
@@ -39,8 +39,8 @@ fn e2e_stdlib_include_basic_trace() {
             .await
             .expect("stdlib INCLUDE + SELECT must succeed in a single call");
 
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0]["n"].as_i64().is_some());
+        assert_eq!(table.len(), 1);
+        assert!(table.cell(0, "n").and_then(|v| v.as_i64()).is_some());
     });
 }
 
@@ -69,7 +69,7 @@ fn e2e_stdlib_include_chrome_scroll_jank() {
 
         let client = manager.get_client(trace).await.expect("spawn tp_shell");
 
-        let rows = client
+        let table = client
             .query(
                 "INCLUDE PERFETTO MODULE chrome.scroll_jank.scroll_jank_v3; \
                  SELECT cause_of_jank, COUNT(*) AS n \
@@ -81,18 +81,18 @@ fn e2e_stdlib_include_chrome_scroll_jank() {
             .expect("chrome stdlib INCLUDE + SELECT must succeed on scroll_jank.pftrace");
 
         assert!(
-            !rows.is_empty(),
+            !table.is_empty(),
             "scroll_jank.pftrace must yield at least one chrome_janky_frames row — \
              empty means either the stdlib view schema broke or the fixture lost jank",
         );
-        for row in &rows {
+        for i in 0..table.len() {
             assert!(
-                row.get("cause_of_jank").is_some(),
-                "row missing cause_of_jank column: {row}",
+                table.cell(i, "cause_of_jank").is_some(),
+                "row {i} missing cause_of_jank column",
             );
             assert!(
-                row["n"].as_i64().is_some(),
-                "COUNT(*) must decode as i64, got: {row}",
+                table.cell(i, "n").and_then(|v| v.as_i64()).is_some(),
+                "row {i}: COUNT(*) must decode as i64",
             );
         }
     });
