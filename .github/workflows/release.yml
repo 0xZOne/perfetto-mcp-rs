@@ -78,4 +78,41 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: ${{ matrix.asset_name }}
           fail_on_unmatched_files: true
-          generate_release_notes: true
+          # Do NOT enable `generate_release_notes` here — when set on every
+          # matrix job, the action appends a "Full Changelog: ..." line per
+          # job (5x), and force-pushed tag re-runs accumulate more (N x 5).
+          # The publish-notes job below sets the body from CHANGELOG.md
+          # exactly once, idempotently.
+
+  publish-notes:
+    name: Publish release notes from CHANGELOG
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Extract CHANGELOG section for this tag
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          # Section spans from "### [VERSION]" up to the next "### [" heading.
+          # awk's "\[" in regex literals trips warnings on some gawks and
+          # mismatches on others, so do this with grep + sed instead.
+          HEADINGS=$(grep -n '^### \[' CHANGELOG.md)
+          START=$(echo "$HEADINGS" | grep -F "### [$VERSION]" | head -1 | cut -d: -f1)
+          if [ -z "$START" ]; then
+            echo "::error::No CHANGELOG entry found for version $VERSION"
+            exit 1
+          fi
+          END=$(echo "$HEADINGS" | awk -F: -v s="$START" '$1 > s { print $1 - 1; exit }')
+          [ -z "$END" ] && END=$(wc -l < CHANGELOG.md)
+          sed -n "${START},${END}p" CHANGELOG.md > release-notes.md
+          echo "Extracted lines $START..$END ($(wc -c < release-notes.md) bytes) for $TAG"
+
+      - name: Overwrite release body
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release edit "$TAG" --notes-file release-notes.md
