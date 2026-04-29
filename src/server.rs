@@ -48,13 +48,15 @@ impl ServerHandler for PerfettoMcpServer {
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct LoadTraceParams {
     /// Absolute path to a Perfetto trace file (.perfetto-trace or .pftrace).
-    pub trace_path: String,
+    #[serde(alias = "trace_path")]
+    pub path: String,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct ExecuteSqlParams {
     /// Absolute path to the trace file to query against.
-    pub trace_path: String,
+    #[serde(alias = "trace_path")]
+    pub path: String,
     /// SQL query to execute (PerfettoSQL syntax).
     pub sql: String,
 }
@@ -62,7 +64,8 @@ pub struct ExecuteSqlParams {
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct ListTablesParams {
     /// Absolute path to the trace file.
-    pub trace_path: String,
+    #[serde(alias = "trace_path")]
+    pub path: String,
     /// Optional GLOB pattern to filter table names (e.g. "chrome_*").
     #[serde(default)]
     pub pattern: Option<String>,
@@ -71,7 +74,8 @@ pub struct ListTablesParams {
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct TableStructureParams {
     /// Absolute path to the trace file.
-    pub trace_path: String,
+    #[serde(alias = "trace_path")]
+    pub path: String,
     /// Name of the table to describe.
     pub table_name: String,
 }
@@ -79,13 +83,15 @@ pub struct TableStructureParams {
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct ListProcessesParams {
     /// Absolute path to the trace file.
-    pub trace_path: String,
+    #[serde(alias = "trace_path")]
+    pub path: String,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct ListThreadsInProcessParams {
     /// Absolute path to the trace file.
-    pub trace_path: String,
+    #[serde(alias = "trace_path")]
+    pub path: String,
     /// Process upid (the trace-internal unique id from `list_processes`).
     /// Takes precedence over `process_name` when both are set — useful for
     /// disambiguating same-named processes (e.g. multiple Renderer instances).
@@ -100,13 +106,15 @@ pub struct ListThreadsInProcessParams {
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct ChromeTraceParams {
     /// Absolute path to the trace file (must be a Chrome trace).
-    pub trace_path: String,
+    #[serde(alias = "trace_path")]
+    pub path: String,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct ChromeMainThreadHotspotsParams {
     /// Absolute path to the trace file (must be a Chrome trace).
-    pub trace_path: String,
+    #[serde(alias = "trace_path")]
+    pub path: String,
     /// Optional process-name filter (e.g. "Renderer", "Browser", "GPU Process").
     /// Useful to scope to one process type without picking a specific instance.
     #[serde(default)]
@@ -403,14 +411,14 @@ impl PerfettoMcpServer {
     #[tool(
         name = "load_trace",
         description = "Load a Perfetto trace file for analysis. This must be called before \
-                       any other tools. The trace_path should be an absolute path to a \
+                       any other tools. The `path` should be an absolute path to a \
                        .perfetto-trace or .pftrace file."
     )]
     async fn load_trace(
         &self,
         Parameters(params): Parameters<LoadTraceParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
+        let client = self.client_for(&params.path).await?;
 
         let status = client
             .status()
@@ -418,7 +426,7 @@ impl PerfettoMcpServer {
             .map_err(|e| format!("Failed to get status: {e}"))?;
 
         let display =
-            format_loaded_trace_display(&params.trace_path, status.loaded_trace_name.as_deref());
+            format_loaded_trace_display(&params.path, status.loaded_trace_name.as_deref());
 
         Ok(format!(
             "Trace loaded successfully: {display}\n\
@@ -432,7 +440,7 @@ impl PerfettoMcpServer {
         description = "Execute a PerfettoSQL query against a loaded trace. Results are capped \
                        at 5000 rows and aggregates are strongly preferred over raw row data.\n\
                        \n\
-                       The trace_path must reference a previously loaded trace.\n\
+                       The `path` must reference a previously loaded trace.\n\
                        \n\
                        Call `list_stdlib_modules` (no trace needed) to see curated modules \
                        with usage examples. The dedicated chrome_* tools cover the most \
@@ -461,7 +469,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ExecuteSqlParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
+        let client = self.client_for(&params.path).await?;
         let table = client
             .query(&params.sql)
             .await
@@ -483,7 +491,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ListTablesParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
+        let client = self.client_for(&params.path).await?;
 
         let sql = match &params.pattern {
             Some(pat) => {
@@ -537,7 +545,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<TableStructureParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
+        let client = self.client_for(&params.path).await?;
         let table_name = sanitize_glob_param(&params.table_name).map_err(|e| e.to_string())?;
 
         let sql = format!("PRAGMA table_info('{table_name}')");
@@ -572,7 +580,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ListProcessesParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
+        let client = self.client_for(&params.path).await?;
         let table = client
             .query("SELECT upid, pid, name, start_ts, end_ts FROM process ORDER BY start_ts")
             .await
@@ -628,7 +636,7 @@ impl PerfettoMcpServer {
                 return Err("Either `upid` or `process_name` must be provided.".to_string());
             }
         };
-        let client = self.client_for(&params.trace_path).await?;
+        let client = self.client_for(&params.path).await?;
         let table = client
             .query(&sql)
             .await
@@ -654,7 +662,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
+        let client = self.client_for(&params.path).await?;
         ensure_chrome_trace(&client, "Chrome scroll jank summary").await?;
         let table = client
             .query(CHROME_SCROLL_JANK_SUMMARY_SQL)
@@ -673,7 +681,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
+        let client = self.client_for(&params.path).await?;
         ensure_chrome_trace(&client, "Chrome page load summary").await?;
         let table = client
             .query(CHROME_PAGE_LOAD_SUMMARY_SQL)
@@ -707,7 +715,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ChromeMainThreadHotspotsParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
+        let client = self.client_for(&params.path).await?;
         ensure_chrome_trace(&client, "Chrome main-thread hotspots").await?;
         let sql = chrome_main_thread_hotspots_sql(params.process_name.as_deref(), params.pid)
             .map_err(|e| e.to_string())?;
@@ -729,7 +737,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
+        let client = self.client_for(&params.path).await?;
         ensure_chrome_trace(&client, "Chrome startup summary").await?;
         let table = client
             .query(CHROME_STARTUP_SUMMARY_SQL)
@@ -750,7 +758,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
+        let client = self.client_for(&params.path).await?;
         ensure_chrome_trace(&client, "Chrome web content interactions").await?;
         let table = client
             .query(CHROME_WEB_CONTENT_INTERACTIONS_SQL)
@@ -1455,7 +1463,7 @@ mod tests {
             let non_chrome_path = "tests/fixtures/basic.perfetto-trace";
             let mk_params = || {
                 Parameters(ChromeTraceParams {
-                    trace_path: non_chrome_path.to_owned(),
+                    path: non_chrome_path.to_owned(),
                 })
             };
 
@@ -1477,7 +1485,7 @@ mod tests {
 
             let r = server
                 .chrome_main_thread_hotspots(Parameters(ChromeMainThreadHotspotsParams {
-                    trace_path: non_chrome_path.to_owned(),
+                    path: non_chrome_path.to_owned(),
                     process_name: None,
                     pid: None,
                 }))
@@ -1563,6 +1571,41 @@ mod tests {
         }
     }
 
+    /// v0.11.0 renamed the trace-file param from `trace_path` to `path`
+    /// across every tool's input. Old callers passing `trace_path` must
+    /// still work via `#[serde(alias = "trace_path")]` so v0.10.x scripts
+    /// don't break on upgrade.
+    #[test]
+    fn params_accept_trace_path_alias_for_backwards_compat() {
+        let from_path: ExecuteSqlParams =
+            serde_json::from_str(r#"{"path": "/x", "sql": "SELECT 1"}"#)
+                .expect("canonical `path` must deserialize");
+        let from_alias: ExecuteSqlParams =
+            serde_json::from_str(r#"{"trace_path": "/x", "sql": "SELECT 1"}"#)
+                .expect("legacy `trace_path` alias must still deserialize");
+        assert_eq!(from_path.path, "/x");
+        assert_eq!(from_alias.path, "/x");
+    }
+
+    /// Pin that `tools/list` advertises only the canonical `path` field.
+    /// `trace_path` is a serde-only deserialization alias — it must NOT
+    /// appear in the JSON Schema. If schemars ever started emitting
+    /// aliases (or if someone reverted the rename), this fails.
+    #[test]
+    fn tool_input_schemas_use_path_not_trace_path() {
+        let server = test_server();
+        for tool in server.tool_router.list_all() {
+            let schema_str =
+                serde_json::to_string(&tool.input_schema).expect("input schema must serialize");
+            assert!(
+                !schema_str.contains("trace_path"),
+                "tool {} input schema must advertise canonical `path` only, not \
+                 the legacy `trace_path` alias; got: {schema_str}",
+                tool.name,
+            );
+        }
+    }
+
     /// No-filter SQL keeps the same `JOIN process p ON ct.upid = p.upid` clause
     /// as the filtered variants, so the join is harmless when no pid filter is
     /// set — this means handlers can always use the same builder.
@@ -1626,7 +1669,7 @@ mod tests {
             let server = test_server();
             let r = server
                 .list_threads_in_process(Parameters(ListThreadsInProcessParams {
-                    trace_path: "/nonexistent".to_owned(),
+                    path: "/nonexistent".to_owned(),
                     upid: None,
                     process_name: None,
                 }))
