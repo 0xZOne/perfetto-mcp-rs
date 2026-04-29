@@ -8,7 +8,7 @@ use rmcp::schemars;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
-    tool, tool_handler, tool_router, Json, ServerHandler, ServiceExt,
+    tool, tool_handler, tool_router, ServerHandler, ServiceExt,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -415,13 +415,13 @@ impl PerfettoMcpServer {
     async fn execute_sql(
         &self,
         Parameters(params): Parameters<ExecuteSqlParams>,
-    ) -> Result<Json<DecodedTable>, String> {
+    ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
         let table = client
             .query(&params.sql)
             .await
             .map_err(format_execute_sql_error)?;
-        Ok(Json(table))
+        serde_json::to_string(&table).map_err(|e| format!("Failed to serialize results: {e}"))
     }
 
     #[tool(
@@ -437,7 +437,7 @@ impl PerfettoMcpServer {
     async fn list_tables(
         &self,
         Parameters(params): Parameters<ListTablesParams>,
-    ) -> Result<Json<TableList>, String> {
+    ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
 
         let sql = match &params.pattern {
@@ -478,7 +478,8 @@ impl PerfettoMcpServer {
             })
             .collect::<Result<Vec<_>, String>>()?;
 
-        Ok(Json(TableList { names }))
+        serde_json::to_string(&TableList { names })
+            .map_err(|e| format!("Failed to serialize results: {e}"))
     }
 
     #[tool(
@@ -490,7 +491,7 @@ impl PerfettoMcpServer {
     async fn list_table_structure(
         &self,
         Parameters(params): Parameters<TableStructureParams>,
-    ) -> Result<Json<TableInfo>, String> {
+    ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
         let table_name = sanitize_glob_param(&params.table_name).map_err(|e| e.to_string())?;
 
@@ -508,10 +509,11 @@ impl PerfettoMcpServer {
             .map(|i| pragma_row_to_column_info(&pragma, i))
             .collect::<Result<Vec<_>, String>>()?;
 
-        Ok(Json(TableInfo {
+        serde_json::to_string(&TableInfo {
             table: table_name,
             columns,
-        }))
+        })
+        .map_err(|e| format!("Failed to serialize results: {e}"))
     }
 
     #[tool(
@@ -524,13 +526,13 @@ impl PerfettoMcpServer {
     async fn list_processes(
         &self,
         Parameters(params): Parameters<ListProcessesParams>,
-    ) -> Result<Json<DecodedTable>, String> {
+    ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
         let table = client
             .query("SELECT upid, pid, name, start_ts, end_ts FROM process ORDER BY start_ts")
             .await
             .map_err(|e| format!("Failed to list processes: {e}"))?;
-        Ok(Json(table))
+        serde_json::to_string(&table).map_err(|e| format!("Failed to serialize results: {e}"))
     }
 
     #[tool(
@@ -544,7 +546,7 @@ impl PerfettoMcpServer {
     async fn list_threads_in_process(
         &self,
         Parameters(params): Parameters<ListThreadsInProcessParams>,
-    ) -> Result<Json<DecodedTable>, String> {
+    ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
         let name_lit = sql_string_literal(&params.process_name).map_err(|e| e.to_string())?;
         // LIMIT keeps us clear of the 5000-row hard cap on Chrome renderer-fork
@@ -568,7 +570,7 @@ impl PerfettoMcpServer {
                 params.process_name
             ));
         }
-        Ok(Json(table))
+        serde_json::to_string(&table).map_err(|e| format!("Failed to serialize results: {e}"))
     }
 
     #[tool(
@@ -582,14 +584,14 @@ impl PerfettoMcpServer {
     async fn chrome_scroll_jank_summary(
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<Json<DecodedTable>, String> {
+    ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
         ensure_chrome_trace(&client, "Chrome scroll jank summary").await?;
         let table = client
             .query(CHROME_SCROLL_JANK_SUMMARY_SQL)
             .await
             .map_err(|e| format_chrome_tool_error("Chrome scroll jank summary", e))?;
-        Ok(Json(table))
+        serde_json::to_string(&table).map_err(|e| format!("Failed to serialize results: {e}"))
     }
 
     #[tool(
@@ -601,14 +603,14 @@ impl PerfettoMcpServer {
     async fn chrome_page_load_summary(
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<Json<DecodedTable>, String> {
+    ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
         ensure_chrome_trace(&client, "Chrome page load summary").await?;
         let table = client
             .query(CHROME_PAGE_LOAD_SUMMARY_SQL)
             .await
             .map_err(|e| format_chrome_tool_error("Chrome page load summary", e))?;
-        Ok(Json(table))
+        serde_json::to_string(&table).map_err(|e| format!("Failed to serialize results: {e}"))
     }
 
     #[tool(
@@ -629,14 +631,14 @@ impl PerfettoMcpServer {
     async fn chrome_main_thread_hotspots(
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<Json<DecodedTable>, String> {
+    ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
         ensure_chrome_trace(&client, "Chrome main-thread hotspots").await?;
         let table = client
             .query(CHROME_MAIN_THREAD_HOTSPOTS_SQL)
             .await
             .map_err(|e| format_chrome_tool_error("Chrome main-thread hotspots", e))?;
-        Ok(Json(table))
+        serde_json::to_string(&table).map_err(|e| format!("Failed to serialize results: {e}"))
     }
 
     #[tool(
@@ -649,14 +651,14 @@ impl PerfettoMcpServer {
     async fn chrome_startup_summary(
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<Json<DecodedTable>, String> {
+    ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
         ensure_chrome_trace(&client, "Chrome startup summary").await?;
         let table = client
             .query(CHROME_STARTUP_SUMMARY_SQL)
             .await
             .map_err(|e| format_chrome_tool_error("Chrome startup summary", e))?;
-        Ok(Json(table))
+        serde_json::to_string(&table).map_err(|e| format!("Failed to serialize results: {e}"))
     }
 
     #[tool(
@@ -670,14 +672,14 @@ impl PerfettoMcpServer {
     async fn chrome_web_content_interactions(
         &self,
         Parameters(params): Parameters<ChromeTraceParams>,
-    ) -> Result<Json<DecodedTable>, String> {
+    ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
         ensure_chrome_trace(&client, "Chrome web content interactions").await?;
         let table = client
             .query(CHROME_WEB_CONTENT_INTERACTIONS_SQL)
             .await
             .map_err(|e| format_chrome_tool_error("Chrome web content interactions", e))?;
-        Ok(Json(table))
+        serde_json::to_string(&table).map_err(|e| format!("Failed to serialize results: {e}"))
     }
 
     #[tool(
@@ -1404,78 +1406,19 @@ mod tests {
         );
     }
 
-    /// 10 of the 12 tools return data via `Json<T>` and must carry an
-    /// outputSchema; `load_trace` returns a text confirmation and
-    /// `list_stdlib_modules` returns a JSON-encoded String — neither
-    /// flows through the `Json<T>` schema-derivation path, so both
-    /// must have `output_schema = None`.
+    /// v0.10.0 reverted `Json<T>` returns to plain `Result<String, String>`
+    /// (Claude Code rendered `structured_content` as multi-line pretty-print,
+    /// blowing up the conversation UI). With no tool returning `Json<T>`,
+    /// none should carry an `outputSchema` — pin that absence so a future
+    /// re-introduction of `Json<T>` is a deliberate, visible change.
     #[test]
-    fn output_schema_present_on_data_returning_tools() {
+    fn no_tool_carries_output_schema() {
         let server = test_server();
-        let tools = server.tool_router.list_all();
-        for name in [
-            "execute_sql",
-            "list_processes",
-            "list_threads_in_process",
-            "chrome_scroll_jank_summary",
-            "chrome_page_load_summary",
-            "chrome_main_thread_hotspots",
-            "chrome_startup_summary",
-            "chrome_web_content_interactions",
-            "list_tables",
-            "list_table_structure",
-        ] {
-            let tool = tools
-                .iter()
-                .find(|t| t.name == name)
-                .unwrap_or_else(|| panic!("tool {name} must exist"));
-            assert!(
-                tool.output_schema.is_some(),
-                "tool {name} must carry an outputSchema (Result<Json<T>, _> return)",
-            );
-        }
-        for name in ["load_trace", "list_stdlib_modules"] {
-            let tool = tools
-                .iter()
-                .find(|t| t.name == name)
-                .unwrap_or_else(|| panic!("tool {name} must exist"));
+        for tool in server.tool_router.list_all() {
             assert!(
                 tool.output_schema.is_none(),
-                "tool {name} returns plain String and must not carry an outputSchema",
-            );
-        }
-    }
-
-    /// Every tabular tool returns Json<DecodedTable>; their outputSchemas
-    /// must be the same value. Catches accidental shape drift if a tool
-    /// is later moved to a custom return type.
-    #[test]
-    fn output_schema_shape_for_tabular_tools_matches_decoded_table() {
-        let server = test_server();
-        let tools = server.tool_router.list_all();
-        let expected = tools
-            .iter()
-            .find(|t| t.name == "execute_sql")
-            .and_then(|t| t.output_schema.as_ref())
-            .expect("execute_sql must have an outputSchema for the comparison anchor")
-            .clone();
-        for name in [
-            "list_processes",
-            "list_threads_in_process",
-            "chrome_scroll_jank_summary",
-            "chrome_page_load_summary",
-            "chrome_main_thread_hotspots",
-            "chrome_startup_summary",
-            "chrome_web_content_interactions",
-        ] {
-            let actual = tools
-                .iter()
-                .find(|t| t.name == name)
-                .and_then(|t| t.output_schema.as_ref())
-                .unwrap_or_else(|| panic!("tool {name} must have outputSchema"));
-            assert_eq!(
-                **actual, *expected,
-                "tabular tool {name} schema diverged from execute_sql's",
+                "tool {} must not carry an outputSchema (v0.10.0 contract)",
+                tool.name,
             );
         }
     }
