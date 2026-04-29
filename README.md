@@ -81,7 +81,7 @@ re-registers the MCP server with Claude Code / Codex idempotently.
 Pin to a specific version with the `VERSION` env var:
 
 ```sh
-VERSION=v0.7.0 curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | VERSION=v0.7.0 sh
 ```
 
 No auto-update daemon — upgrades are explicit.

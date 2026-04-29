@@ -86,15 +86,36 @@ pub struct ListProcessesParams {
 pub struct ListThreadsInProcessParams {
     /// Absolute path to the trace file.
     pub trace_path: String,
+    /// Process upid (the trace-internal unique id from `list_processes`).
+    /// Takes precedence over `process_name` when both are set — useful for
+    /// disambiguating same-named processes (e.g. multiple Renderer instances).
+    #[serde(default)]
+    pub upid: Option<i64>,
     /// Process name to match exactly (e.g. "com.android.chrome",
-    /// "/system/bin/init"). Call list_processes first if unsure.
-    pub process_name: String,
+    /// "/system/bin/init"). Either this or `upid` must be provided.
+    #[serde(default)]
+    pub process_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct ChromeTraceParams {
     /// Absolute path to the trace file (must be a Chrome trace).
     pub trace_path: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct ChromeMainThreadHotspotsParams {
+    /// Absolute path to the trace file (must be a Chrome trace).
+    pub trace_path: String,
+    /// Optional process-name filter (e.g. "Renderer", "Browser", "GPU Process").
+    /// Useful to scope to one process type without picking a specific instance.
+    #[serde(default)]
+    pub process_name: Option<String>,
+    /// Optional pid filter — disambiguates between multiple processes sharing a
+    /// name (e.g. several Renderer instances). Get pid from `list_processes`.
+    /// ANDed with `process_name` when both are set.
+    #[serde(default)]
+    pub pid: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -203,30 +224,54 @@ pub const CHROME_PAGE_LOAD_SUMMARY_SQL: &str = "INCLUDE PERFETTO MODULE chrome.p
      ORDER BY navigation_start_ts DESC \
      LIMIT 100";
 
-/// SQL for chrome_main_thread_hotspots. Exported for integration tests.
-/// Uses thread.is_main_thread = 1 (tid == pid in trace_processor).
-/// CAVEAT: is_main_thread is CppOptional and may be NULL for traces that
+/// SQL builder for `chrome_main_thread_hotspots`. Exported for integration tests.
+///
+/// Uses `thread.is_main_thread = 1` (tid == pid in trace_processor).
+/// CAVEAT: `is_main_thread` is CppOptional and may be NULL for traces that
 /// lack complete thread creation metadata — in that case the tool returns
 /// empty rows (no SQL error). If empty, agents can fall back to execute_sql
-/// with WHERE thread_name IN ('CrBrowserMain', 'CrRendererMain').
-pub const CHROME_MAIN_THREAD_HOTSPOTS_SQL: &str = "INCLUDE PERFETTO MODULE chrome.tasks; \
-     SELECT \
-       ct.id, \
-       ct.name, \
-       ct.task_type, \
-       ct.thread_name, \
-       ct.process_name, \
-       ct.dur / 1e6 AS dur_ms, \
-       CASE WHEN ct.thread_dur IS NOT NULL AND ct.dur > 0 \
-            THEN ROUND(ct.thread_dur * 100.0 / ct.dur, 1) \
-       END AS cpu_pct, \
-       ct.thread_dur / 1e6 AS thread_dur_ms \
-     FROM chrome_tasks ct \
-     JOIN thread t ON ct.utid = t.utid \
-     WHERE t.is_main_thread = 1 \
-       AND ct.dur > 16000000 \
-     ORDER BY ct.dur DESC \
-     LIMIT 100";
+/// with `WHERE thread_name IN ('CrBrowserMain', 'CrRendererMain')`.
+///
+/// Optional filters:
+/// - `process_name` adds `AND ct.process_name = '<name>'`
+/// - `pid` adds `AND p.pid = <pid>`
+///
+/// Both AND together when set. The base SQL also picks up a
+/// `JOIN process p ON ct.upid = p.upid` so `p.pid` is referenceable; the
+/// join is harmless when no pid filter is present.
+pub fn chrome_main_thread_hotspots_sql(
+    process_name: Option<&str>,
+    pid: Option<i64>,
+) -> Result<String, PerfettoError> {
+    let mut sql = String::from(
+        "INCLUDE PERFETTO MODULE chrome.tasks; \
+         SELECT \
+           ct.id, \
+           ct.name, \
+           ct.task_type, \
+           ct.thread_name, \
+           ct.process_name, \
+           ct.dur / 1e6 AS dur_ms, \
+           CASE WHEN ct.thread_dur IS NOT NULL AND ct.dur > 0 \
+                THEN ROUND(ct.thread_dur * 100.0 / ct.dur, 1) \
+           END AS cpu_pct, \
+           ct.thread_dur / 1e6 AS thread_dur_ms \
+         FROM chrome_tasks ct \
+         JOIN thread t ON ct.utid = t.utid \
+         JOIN process p ON ct.upid = p.upid \
+         WHERE t.is_main_thread = 1 \
+           AND ct.dur > 16000000",
+    );
+    if let Some(name) = process_name {
+        let lit = sql_string_literal(name)?;
+        sql.push_str(&format!(" AND ct.process_name = {lit}"));
+    }
+    if let Some(pid) = pid {
+        sql.push_str(&format!(" AND p.pid = {pid}"));
+    }
+    sql.push_str(" ORDER BY ct.dur DESC LIMIT 100");
+    Ok(sql)
+}
 
 /// SQL for chrome_web_content_interactions. Exported for integration tests.
 pub const CHROME_WEB_CONTENT_INTERACTIONS_SQL: &str =
@@ -537,37 +582,61 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "list_threads_in_process",
-        description = "List up to 2000 threads belonging to processes matching a given \
-                       name, returning tid, thread_name, pid, and upid for each. Handles \
-                       the common case of multiple processes sharing a name (e.g. Chrome \
-                       renderer forks). Use list_processes first to find the exact name; \
-                       if the cap is hit, drill down by pid with execute_sql."
+        description = "List up to 2000 threads belonging to a process, returning tid, \
+                       thread_name, pid, and upid for each. Identify the process by \
+                       either `upid` (trace-internal id from list_processes — \
+                       disambiguates between multiple processes sharing a name, e.g. \
+                       multiple Renderer instances) OR `process_name` (exact match). \
+                       `upid` wins when both are set. If the 2000-row cap is hit, drill \
+                       down via execute_sql."
     )]
     async fn list_threads_in_process(
         &self,
         Parameters(params): Parameters<ListThreadsInProcessParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.trace_path).await?;
-        let name_lit = sql_string_literal(&params.process_name).map_err(|e| e.to_string())?;
+        // Validate inputs BEFORE opening the trace — failing fast on bad
+        // params avoids spawning trace_processor_shell for a request that
+        // can't possibly succeed.
         // LIMIT keeps us clear of the 5000-row hard cap on Chrome renderer-fork
         // and Android system_server traces where a single process name can
         // fan out to thousands of threads.
-        let sql = format!(
-            "SELECT t.tid, t.name AS thread_name, p.pid, p.upid \
-             FROM thread t JOIN process p ON t.upid = p.upid \
-             WHERE p.name = {name_lit} \
-             ORDER BY p.pid, t.tid \
-             LIMIT 2000"
-        );
+        let (sql, selector_for_error) = match (params.upid, &params.process_name) {
+            (Some(upid), _) => (
+                format!(
+                    "SELECT t.tid, t.name AS thread_name, p.pid, p.upid \
+                     FROM thread t JOIN process p ON t.upid = p.upid \
+                     WHERE p.upid = {upid} \
+                     ORDER BY p.pid, t.tid \
+                     LIMIT 2000"
+                ),
+                format!("upid {upid}"),
+            ),
+            (None, Some(name)) => {
+                let name_lit = sql_string_literal(name).map_err(|e| e.to_string())?;
+                (
+                    format!(
+                        "SELECT t.tid, t.name AS thread_name, p.pid, p.upid \
+                         FROM thread t JOIN process p ON t.upid = p.upid \
+                         WHERE p.name = {name_lit} \
+                         ORDER BY p.pid, t.tid \
+                         LIMIT 2000"
+                    ),
+                    format!("process name {name:?}"),
+                )
+            }
+            (None, None) => {
+                return Err("Either `upid` or `process_name` must be provided.".to_string());
+            }
+        };
+        let client = self.client_for(&params.trace_path).await?;
         let table = client
             .query(&sql)
             .await
             .map_err(|e| format!("Failed to list threads: {e}"))?;
         if table.is_empty() {
             return Err(format!(
-                "No threads found for process name {:?}. Call list_processes \
-                 to see available process names.",
-                params.process_name
+                "No threads found for {selector_for_error}. Call list_processes \
+                 to see available processes."
             ));
         }
         serde_json::to_string(&table).map_err(|e| format!("Failed to serialize results: {e}"))
@@ -621,6 +690,12 @@ impl PerfettoMcpServer {
                        thread_name, process_name, dur_ms, cpu_pct (thread_dur/dur), \
                        thread_dur_ms. Uses chrome.tasks. Chrome traces only.\n\
                        \n\
+                       Optional `process_name` and `pid` filters scope to one process \
+                       or one process type. Multi-renderer traces benefit from `pid` \
+                       (look up via list_processes); use `process_name='Renderer'` to \
+                       see all renderers' main threads together. Both filters AND when \
+                       set.\n\
+                       \n\
                        Empty `rows` means either all main-thread tasks stayed under \
                        the 16 ms frame budget (good performance), or thread metadata \
                        is incomplete (is_main_thread is NULL). If the latter is \
@@ -630,12 +705,14 @@ impl PerfettoMcpServer {
     )]
     async fn chrome_main_thread_hotspots(
         &self,
-        Parameters(params): Parameters<ChromeTraceParams>,
+        Parameters(params): Parameters<ChromeMainThreadHotspotsParams>,
     ) -> Result<String, String> {
         let client = self.client_for(&params.trace_path).await?;
         ensure_chrome_trace(&client, "Chrome main-thread hotspots").await?;
+        let sql = chrome_main_thread_hotspots_sql(params.process_name.as_deref(), params.pid)
+            .map_err(|e| e.to_string())?;
         let table = client
-            .query(CHROME_MAIN_THREAD_HOTSPOTS_SQL)
+            .query(&sql)
             .await
             .map_err(|e| format_chrome_tool_error("Chrome main-thread hotspots", e))?;
         serde_json::to_string(&table).map_err(|e| format!("Failed to serialize results: {e}"))
@@ -736,8 +813,12 @@ impl PerfettoMcpServer {
     }
 }
 
-/// Hint is gated on `QueryErrorKind::MissingTable` so unrelated SQL errors
-/// (e.g. a column typo) don't get misrouted to "go call list_tables."
+/// Hints are kind-gated so unrelated SQL errors don't get misrouted. The
+/// MissingColumn hint is intentionally view-agnostic — naming specific
+/// stdlib views (e.g. only `chrome_page_loads`) would bias recovery for
+/// queries against `slice` / `args` / `thread_state` etc., so the hint
+/// names both the stdlib path (`INCLUDE PERFETTO MODULE`) and base tables
+/// without favoring either.
 fn format_execute_sql_error(err: PerfettoError) -> String {
     match err {
         PerfettoError::QueryError {
@@ -748,6 +829,16 @@ fn format_execute_sql_error(err: PerfettoError) -> String {
              name, then `list_table_structure` on it before retrying. Stdlib tables \
              (e.g. `chrome_scroll_update_info`) require `INCLUDE PERFETTO MODULE ...;` \
              first."
+        ),
+        PerfettoError::QueryError {
+            kind: QueryErrorKind::MissingColumn,
+            message,
+        } => format!(
+            "SQL error: {message}\n\nHint: Call `list_table_structure('<table>')` \
+             against the queried table to see its actual columns. Both stdlib \
+             views (anything from `INCLUDE PERFETTO MODULE ...`) and base tables \
+             (`slice`, `thread`, `process`, ...) have fixed schemas — avoid \
+             inferring column names by analogy."
         ),
         PerfettoError::QueryError { message, .. } => format!("SQL error: {message}"),
         PerfettoError::TooManyRows => format!(
@@ -784,6 +875,17 @@ fn format_chrome_tool_error(tool_label: &str, err: PerfettoError) -> String {
              stdlib module is not available in this trace_processor_shell. \
              If PERFETTO_TP_PATH is set, point it at a recent binary; \
              otherwise use execute_sql with a different query."
+        ),
+        PerfettoError::QueryError {
+            kind: QueryErrorKind::MissingColumn,
+            message,
+        } => format!(
+            "Failed to run {tool_label}: {message}\n\nHint: Call \
+             `list_table_structure('<table>')` against the queried table to see \
+             its actual columns. Both stdlib views (anything from \
+             `INCLUDE PERFETTO MODULE ...`) and base tables (`slice`, `thread`, \
+             `process`, ...) have fixed schemas — avoid inferring column names \
+             by analogy."
         ),
         PerfettoError::QueryError { message, .. } => {
             format!("Failed to run {tool_label}: {message}")
@@ -1036,6 +1138,38 @@ mod tests {
         assert!(
             formatted.contains("INCLUDE PERFETTO MODULE"),
             "hint must mention the stdlib include directive, got: {formatted}",
+        );
+    }
+
+    /// MissingColumn hint must be view-agnostic — naming specific stdlib views
+    /// (e.g. `chrome_page_loads`) would bias recovery for queries against base
+    /// tables like `slice` / `args`. The negative assertion is the bias guard.
+    #[test]
+    fn execute_sql_hint_fires_on_missing_column() {
+        let formatted = format_execute_sql_error(PerfettoError::QueryError {
+            kind: QueryErrorKind::MissingColumn,
+            message: "no such column: navigation_id".to_owned(),
+        });
+        assert!(
+            formatted.contains("Hint:"),
+            "missing-column errors must surface a hint, got: {formatted}",
+        );
+        assert!(
+            formatted.contains("list_table_structure"),
+            "hint must point at list_table_structure, got: {formatted}",
+        );
+        assert!(
+            formatted.contains("INCLUDE PERFETTO MODULE"),
+            "hint must mention the stdlib path, got: {formatted}",
+        );
+        assert!(
+            formatted.contains("slice"),
+            "hint must name at least one base table, got: {formatted}",
+        );
+        assert!(
+            !formatted.contains("chrome_page_loads") && !formatted.contains("chrome_tasks"),
+            "hint must NOT name specific stdlib views — that biases recovery for \
+             non-Chrome queries; got: {formatted}",
         );
     }
 
@@ -1341,7 +1475,13 @@ mod tests {
             assert!(err.contains("Chrome-family trace"), "got: {err}");
             assert!(err.contains("list_stdlib_modules"), "got: {err}");
 
-            let r = server.chrome_main_thread_hotspots(mk_params()).await;
+            let r = server
+                .chrome_main_thread_hotspots(Parameters(ChromeMainThreadHotspotsParams {
+                    trace_path: non_chrome_path.to_owned(),
+                    process_name: None,
+                    pid: None,
+                }))
+                .await;
             let err = r
                 .map(|_| ())
                 .expect_err("chrome_main_thread_hotspots: preflight must reject");
@@ -1421,6 +1561,83 @@ mod tests {
                 tool.name,
             );
         }
+    }
+
+    /// No-filter SQL keeps the same `JOIN process p ON ct.upid = p.upid` clause
+    /// as the filtered variants, so the join is harmless when no pid filter is
+    /// set — this means handlers can always use the same builder.
+    #[test]
+    fn chrome_main_thread_hotspots_sql_no_filter_runs_all_main_threads() {
+        let sql = chrome_main_thread_hotspots_sql(None, None).expect("builder must succeed");
+        assert!(sql.contains("WHERE t.is_main_thread = 1"));
+        assert!(sql.contains("AND ct.dur > 16000000"));
+        assert!(sql.contains("ORDER BY ct.dur DESC LIMIT 100"));
+        assert!(
+            !sql.contains("ct.process_name ="),
+            "no-filter SQL must not emit process_name filter, got: {sql}",
+        );
+        assert!(
+            !sql.contains("p.pid ="),
+            "no-filter SQL must not emit pid filter, got: {sql}",
+        );
+    }
+
+    #[test]
+    fn chrome_main_thread_hotspots_sql_with_pid_emits_filter() {
+        let sql = chrome_main_thread_hotspots_sql(None, Some(12800))
+            .expect("pid-filter builder must succeed");
+        assert!(sql.contains("AND p.pid = 12800"), "got: {sql}");
+        assert!(
+            !sql.contains("ct.process_name ="),
+            "pid-only filter must not emit process_name clause, got: {sql}",
+        );
+    }
+
+    #[test]
+    fn chrome_main_thread_hotspots_sql_with_process_name_emits_filter() {
+        let sql = chrome_main_thread_hotspots_sql(Some("Renderer"), None)
+            .expect("name-filter builder must succeed");
+        assert!(
+            sql.contains("AND ct.process_name = 'Renderer'"),
+            "process_name filter must use sql_string_literal quoting, got: {sql}",
+        );
+    }
+
+    #[test]
+    fn chrome_main_thread_hotspots_sql_with_both_filters_ands_them() {
+        let sql = chrome_main_thread_hotspots_sql(Some("Renderer"), Some(12800))
+            .expect("combined-filter builder must succeed");
+        assert!(
+            sql.contains("AND ct.process_name = 'Renderer'"),
+            "got: {sql}"
+        );
+        assert!(sql.contains("AND p.pid = 12800"), "got: {sql}");
+    }
+
+    /// list_threads_in_process now accepts upid OR process_name. With neither
+    /// set, it must surface a clear error eagerly (before any RPC).
+    #[test]
+    fn list_threads_in_process_requires_one_of_upid_or_process_name() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        runtime.block_on(async {
+            let server = test_server();
+            let r = server
+                .list_threads_in_process(Parameters(ListThreadsInProcessParams {
+                    trace_path: "/nonexistent".to_owned(),
+                    upid: None,
+                    process_name: None,
+                }))
+                .await;
+            let err = r.expect_err("must reject when neither upid nor process_name is set");
+            assert!(err.contains("upid"), "error must mention upid, got: {err}");
+            assert!(
+                err.contains("process_name"),
+                "error must mention process_name, got: {err}",
+            );
+        });
     }
 
     #[test]

@@ -78,7 +78,7 @@ chmod +x perfetto-mcp-rs
 用 `VERSION` 环境变量指定特定版本：
 
 ```sh
-VERSION=v0.7.0 curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | VERSION=v0.7.0 sh
 ```
 
 无后台自动更新——升级由用户显式触发。

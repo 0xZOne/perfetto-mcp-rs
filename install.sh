@@ -105,7 +105,11 @@ main() {
       ;;
   esac
 
-  info "Detecting latest release from github.com/${REPO}"
+  if [ "$VERSION" = "latest" ]; then
+    info "Detecting latest release from github.com/${REPO}"
+  else
+    info "Installing pinned release ${VERSION} from github.com/${REPO}"
+  fi
   tag="$(resolve_version)"
   [ -n "$tag" ] || err "could not resolve release tag"
   info "Installing ${BIN_NAME} ${tag} (${platform})"

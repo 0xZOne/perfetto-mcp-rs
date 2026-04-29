@@ -19,7 +19,7 @@
 use std::path::Path;
 
 use perfetto_mcp_rs::server::{
-    CHROME_MAIN_THREAD_HOTSPOTS_SQL, CHROME_PAGE_LOAD_SUMMARY_SQL, CHROME_SCROLL_JANK_SUMMARY_SQL,
+    chrome_main_thread_hotspots_sql, CHROME_PAGE_LOAD_SUMMARY_SQL, CHROME_SCROLL_JANK_SUMMARY_SQL,
     CHROME_STARTUP_SUMMARY_SQL, CHROME_TRACE_PREFLIGHT_SQL, CHROME_WEB_CONTENT_INTERACTIONS_SQL,
 };
 use perfetto_mcp_rs::tp_manager::TraceProcessorManager;
@@ -112,8 +112,10 @@ fn e2e_chrome_main_thread_hotspots_against_fixture() {
         let trace = Path::new("tests/fixtures/page_loads.pftrace");
 
         let client = manager.get_client(trace).await.expect("spawn tp_shell");
+        let sql =
+            chrome_main_thread_hotspots_sql(None, None).expect("hotspots SQL builder must succeed");
         let table = client
-            .query(CHROME_MAIN_THREAD_HOTSPOTS_SQL)
+            .query(&sql)
             .await
             .expect("chrome main-thread hotspots query must succeed on page_loads.pftrace");
 

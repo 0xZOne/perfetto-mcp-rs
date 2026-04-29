@@ -14,6 +14,7 @@ pub const MAX_ROWS: usize = 5000;
 pub enum QueryErrorKind {
     MissingTable,
     MissingModule,
+    MissingColumn,
     Other,
 }
 
@@ -28,6 +29,8 @@ impl QueryErrorKind {
             QueryErrorKind::MissingTable
         } else if message.contains("Module not found:") {
             QueryErrorKind::MissingModule
+        } else if message.contains("no such column:") {
+            QueryErrorKind::MissingColumn
         } else {
             QueryErrorKind::Other
         }
@@ -75,6 +78,14 @@ mod tests {
         assert_eq!(
             QueryErrorKind::classify("Module not found: chrome.scroll_jank.scroll_jank_v3"),
             QueryErrorKind::MissingModule,
+        );
+    }
+
+    #[test]
+    fn classify_recognizes_missing_column() {
+        assert_eq!(
+            QueryErrorKind::classify("no such column: navigation_id"),
+            QueryErrorKind::MissingColumn,
         );
     }
 
