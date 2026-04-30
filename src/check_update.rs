@@ -7,7 +7,7 @@
 //! decision logic is unit-testable without HTTP:
 //! - `parse_release`: pure JSON → `LatestRelease`.
 //! - `compare`: pure (current, latest) → `Outcome`.
-//! - `render`: pure (Result<Outcome, CheckError>) → `(stdout, stderr, ExitCode)`.
+//! - `render`: pure (Result<Outcome, CheckError>) → `(stdout, stderr, u8)`.
 //! - `fetch_latest`: impure HTTP GET (the only piece exercised at runtime).
 //! - `run`: glues `fetch_latest` + `compare` + `render` and prints to real I/O.
 
@@ -74,7 +74,7 @@ pub async fn run() -> ExitCode {
     if let Some(s) = stderr {
         eprintln!("{s}");
     }
-    code
+    ExitCode::from(code)
 }
 
 async fn check() -> Result<Outcome, CheckError> {
@@ -135,19 +135,19 @@ fn compare(current: Version, latest: Version, published_at: String) -> Outcome {
     }
 }
 
-fn render(result: Result<Outcome, CheckError>) -> (Option<String>, Option<String>, ExitCode) {
+fn render(result: Result<Outcome, CheckError>) -> (Option<String>, Option<String>, u8) {
     match result {
         Ok(Outcome::UpToDate { current }) => (
             Some(format!("You're on v{current} (latest).")),
             None,
-            ExitCode::from(0),
+            0,
         ),
         Ok(Outcome::Ahead { current, latest }) => (
             Some(format!(
                 "You're on v{current}, ahead of latest release v{latest} (local dev build)."
             )),
             None,
-            ExitCode::from(0),
+            0,
         ),
         Ok(Outcome::Behind {
             current,
@@ -159,12 +159,12 @@ fn render(result: Result<Outcome, CheckError>) -> (Option<String>, Option<String
                  Run `curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh` to upgrade."
             )),
             None,
-            ExitCode::from(2),
+            2,
         ),
         Err(e) => (
             None,
             Some(format!("check-update failed: {e}")),
-            ExitCode::from(1),
+            1,
         ),
     }
 }
@@ -214,18 +214,15 @@ mod tests {
 
     #[test]
     fn render_up_to_date_prints_to_stdout_exits_zero() {
-        let (stdout, stderr, _code) = render(Ok(Outcome::UpToDate { current: v("0.12.0") }));
+        let (stdout, stderr, code) = render(Ok(Outcome::UpToDate { current: v("0.12.0") }));
         assert_eq!(stdout, Some("You're on v0.12.0 (latest).".to_owned()));
         assert_eq!(stderr, None);
-        // ExitCode does not implement PartialEq; assert via Debug repr fallback.
-        // The "0" code is the only path that produces stdout-only with no stderr,
-        // so this test name pins the contract; precise code is covered by the
-        // exit-code test below.
+        assert_eq!(code, 0);
     }
 
     #[test]
     fn render_ahead_prints_dev_build_note_exits_zero() {
-        let (stdout, stderr, _code) = render(Ok(Outcome::Ahead {
+        let (stdout, stderr, code) = render(Ok(Outcome::Ahead {
             current: v("0.12.1"),
             latest: v("0.12.0"),
         }));
@@ -234,11 +231,12 @@ mod tests {
         assert!(s.contains("v0.12.0"), "got: {s}");
         assert!(s.contains("local dev build"), "got: {s}");
         assert_eq!(stderr, None);
+        assert_eq!(code, 0);
     }
 
     #[test]
     fn render_behind_includes_upgrade_command_exits_two() {
-        let (stdout, stderr, _code) = render(Ok(Outcome::Behind {
+        let (stdout, stderr, code) = render(Ok(Outcome::Behind {
             current: v("0.11.3"),
             latest: v("0.12.0"),
             published_at: "2026-04-30T12:34:56Z".to_owned(),
@@ -249,42 +247,40 @@ mod tests {
         assert!(s.contains("2026-04-30"), "got: {s}");
         assert!(s.contains("install.sh | sh"), "got: {s}");
         assert_eq!(stderr, None);
+        assert_eq!(code, 2);
     }
 
     #[test]
     fn render_error_writes_to_stderr_exits_one() {
         let err = CheckError::Network("connection refused".to_owned());
-        let (stdout, stderr, _code) = render(Err(err));
+        let (stdout, stderr, code) = render(Err(err));
         assert_eq!(stdout, None);
         let s = stderr.expect("error must produce stderr");
         assert!(s.starts_with("check-update failed:"), "got: {s}");
         assert!(s.contains("connection refused"), "got: {s}");
+        assert_eq!(code, 1);
     }
 
-    /// Pin the three exit codes by inspecting the raw `u8` form. `ExitCode`
-    /// itself is opaque (no public Debug or PartialEq), but it constructs from
-    /// `u8` deterministically — so we re-derive the input rather than try to
-    /// inspect the result. This pins the *contract*: each Outcome maps to a
-    /// known code, and changing those mappings without changing the test is
-    /// impossible.
+    /// Pin the three exit codes (0 / 1 / 2) per branch. The four `render_*`
+    /// branch tests above also pin codes individually; this test exists as a
+    /// single-place smoke that verifies all branches produce distinct codes
+    /// matching the §3.3 contract.
     #[test]
     fn render_exit_codes_pin_contract() {
-        // We can't inspect ExitCode, but we can inspect what render emits to
-        // stdout/stderr per branch, plus pin the constants we feed to ExitCode
-        // by reading the source: 0 for UpToDate / Ahead, 2 for Behind, 1 for
-        // Err. The five tests above cover the stdout/stderr halves; this test
-        // intentionally just documents the contract here as a focused smoke.
-        // (If the source moves to a different exit-code triple, this test
-        // doc will be revisited together with that change.)
-        let (out, err, _) = render(Ok(Outcome::UpToDate { current: v("1.0.0") }));
-        assert!(out.is_some() && err.is_none());
-        let (out, err, _) = render(Ok(Outcome::Behind {
+        let (_, _, code) = render(Ok(Outcome::UpToDate { current: v("1.0.0") }));
+        assert_eq!(code, 0);
+        let (_, _, code) = render(Ok(Outcome::Ahead {
+            current: v("1.0.1"),
+            latest: v("1.0.0"),
+        }));
+        assert_eq!(code, 0);
+        let (_, _, code) = render(Ok(Outcome::Behind {
             current: v("1.0.0"),
             latest: v("2.0.0"),
-            published_at: String::new(),
+            published_at: "2026-04-30T00:00:00Z".to_owned(),
         }));
-        assert!(out.is_some() && err.is_none());
-        let (out, err, _) = render(Err(CheckError::Network(String::new())));
-        assert!(out.is_none() && err.is_some());
+        assert_eq!(code, 2);
+        let (_, _, code) = render(Err(CheckError::Network(String::new())));
+        assert_eq!(code, 1);
     }
 }
