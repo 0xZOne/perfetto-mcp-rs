@@ -1,14 +1,14 @@
 <p align="center">
-  <img src="assets/brand/logo-wordmark.svg" width="820" alt="perfetto-mcp-rs logo">
+  <img src="https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/assets/brand/logo-wordmark.svg" width="820" alt="perfetto-mcp-rs logo">
 </p>
 
 # perfetto-mcp-rs
 
 [![CI](https://github.com/0xZOne/perfetto-mcp-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/0xZOne/perfetto-mcp-rs/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/0xZOne/perfetto-mcp-rs)](https://github.com/0xZOne/perfetto-mcp-rs/releases)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](./LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/LICENSE-MIT)
 
-[English](README.md) | **简体中文**
+[English](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/README.md) | **简体中文**
 
 让 LLM 读懂 [Perfetto](https://perfetto.dev) trace 的
 [MCP](https://modelcontextprotocol.io) 服务器。在 Claude Code（或任何支持
@@ -250,5 +250,5 @@ cargo fmt           # 格式化
 
 ## 许可证
 
-双协议授权：[Apache 2.0](LICENSE-APACHE) 或 [MIT](LICENSE-MIT)，任选其一
+双协议授权：[Apache 2.0](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/LICENSE-APACHE) 或 [MIT](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/LICENSE-MIT)，任选其一
 即可。向本仓库提交的代码默认按同样的双协议发布。

@@ -1,14 +1,14 @@
 <p align="center">
-  <img src="assets/brand/logo-wordmark.svg" width="820" alt="perfetto-mcp-rs logo">
+  <img src="https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/assets/brand/logo-wordmark.svg" width="820" alt="perfetto-mcp-rs logo">
 </p>
 
 # perfetto-mcp-rs
 
 [![CI](https://github.com/0xZOne/perfetto-mcp-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/0xZOne/perfetto-mcp-rs/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/0xZOne/perfetto-mcp-rs)](https://github.com/0xZOne/perfetto-mcp-rs/releases)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](./LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/LICENSE-MIT)
 
-**English** | [简体中文](README.zh-CN.md)
+**English** | [简体中文](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/README.zh-CN.md)
 
 An [MCP](https://modelcontextprotocol.io) server for analyzing
 [Perfetto](https://perfetto.dev) traces with LLMs. Point Claude Code (or any
@@ -259,6 +259,6 @@ cargo fmt           # format
 
 ## License
 
-Dual-licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
-[MIT license](LICENSE-MIT) at your option. Contributions are accepted under
+Dual-licensed under either of [Apache License, Version 2.0](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/LICENSE-APACHE) or
+[MIT license](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/LICENSE-MIT) at your option. Contributions are accepted under
 the same terms.
