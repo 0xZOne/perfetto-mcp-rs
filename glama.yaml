@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: MCPServer
+metadata:
+  name: perfetto-mcp-rs
+  description: >-
+    MCP server for Perfetto trace analysis. Runs PerfettoSQL queries on
+    .perfetto-trace / .pftrace files via auto-downloaded trace_processor_shell,
+    with dedicated Chrome tools for page loads, scroll jank, main-thread
+    hotspots, and stdlib module discovery.
+  version: "0.12.2"
+  tags:
+    - perfetto
+    - tracing
+    - profiling
+    - chrome
+    - rust
+    - performance
+
+spec:
+  docker:
+    dockerfile: Dockerfile
+    context: .
+
+  runtime:
+    command: ["/usr/local/bin/perfetto-mcp-rs"]
+    workingDir: /home/mcp
+    user: mcp
+
+  resources:
+    memory: "512Mi"
+    cpu: "0.5"
+
+  mcp:
+    protocol: stdio
+    capabilities:
+      - tools
+
+  tools:
+    - name: load_trace
+      description: "Load a Perfetto trace file (.perfetto-trace / .pftrace) into trace_processor."
+    - name: execute_sql
+      description: "Run a PerfettoSQL query against the loaded trace."
+    - name: list_tables
+      description: "List all tables and views available in the loaded trace."
+    - name: list_table_structure
+      description: "List the columns and their types for a given table or view."
+    - name: list_stdlib_modules
+      description: "List all PerfettoSQL stdlib modules available for INCLUDE PERFETTO MODULE."
+    - name: list_processes
+      description: "List all processes captured in the loaded trace."
+    - name: list_threads_in_process
+      description: "List all threads within a given process (by upid or process_name)."
+    - name: chrome_main_thread_hotspots
+      description: "Aggregate Chrome main-thread hotspots; supports optional process_name and pid filters."
+    - name: chrome_page_load_summary
+      description: "Summarize Chrome page-load timings (FCP, LCP, DCL) per navigation."
+    - name: chrome_scroll_jank_summary
+      description: "Summarize Chrome scroll-jank events with frame-level causes."
+    - name: chrome_startup_summary
+      description: "Summarize Chrome browser-process startup timings."
+    - name: chrome_web_content_interactions
+      description: "Aggregate Chrome web-content input interactions (INP latencies)."
+
+documentation:
+  homepage: "https://github.com/0xZOne/perfetto-mcp-rs"
+  readme: "README.md"
+  install:
+    - name: cargo
+      command: "cargo install perfetto-mcp-rs"
+    - name: homebrew
+      command: "brew tap 0xZOne/tap && brew install perfetto-mcp-rs"
+    - name: curl
+      command: "curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh"
+
+deployment:
+  category: "developer-tools"
+  subcategory: "profiling"
