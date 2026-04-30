@@ -11,16 +11,27 @@ use rmcp::{
     tool, tool_handler, tool_router, ServerHandler, ServiceExt,
 };
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
+use tokio::sync::Mutex;
 
 use crate::error::{PerfettoError, QueryErrorKind, MAX_ROWS};
 use crate::query::DecodedTable;
 use crate::tp_manager::{loaded_name_matches, strip_size_suffix, TraceProcessorManager};
 
 /// MCP server providing Perfetto trace analysis tools.
+///
+/// `current_trace` is set by `load_trace` on success and is the **only** path
+/// source for every other handler — no other tool accepts an explicit `path`
+/// parameter. Switching between multiple cached traces is therefore done by
+/// re-calling `load_trace`, which is near-zero-cost when the manager already
+/// has a cached `trace_processor_shell` for that path. Overwritten on each
+/// successful `load_trace`, so "load A then load B then execute_sql" runs
+/// against B.
 #[derive(Debug, Clone)]
 pub struct PerfettoMcpServer {
     manager: Arc<TraceProcessorManager>,
+    current_trace: Arc<Mutex<Option<String>>>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -58,6 +69,81 @@ impl ServerHandler for PerfettoMcpServer {
 //
 // Note: serde aliases (`#[serde(alias = "trace_path")]`) are recognized as
 // the field they alias, so they don't trigger the unknown-field error.
+//
+// Numeric fields use the `lenient_*` deserializers below to also accept
+// JSON-string-of-number forms (`"12800"` as well as `12800`). Motivated by a
+// v0.11.2 Claude Code session that consistently stringified every numeric
+// argument and bounced 4 times before giving up. JsonSchema still advertises
+// `integer`/`number` so well-behaved LLMs see strict types; the deserializer
+// is only a safety net for the LLMs that don't.
+
+/// Deserialize an `Option<i64>` that also accepts a JSON string holding a
+/// signed integer. Returns `None` for `null` or missing.
+fn lenient_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Number(n) => n.as_i64().map(Some).ok_or_else(|| {
+            D::Error::custom(format!("integer out of i64 range or non-integral: {n}"))
+        }),
+        serde_json::Value::String(s) => s.parse::<i64>().map(Some).map_err(|e| {
+            D::Error::custom(format!(
+                "expected integer or numeric string, got string {s:?}: {e}"
+            ))
+        }),
+        other => Err(D::Error::custom(format!(
+            "expected integer or numeric string, got {other}"
+        ))),
+    }
+}
+
+/// `Option<f64>` analogue of `lenient_i64`.
+fn lenient_f64<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Number(n) => n
+            .as_f64()
+            .map(Some)
+            .ok_or_else(|| D::Error::custom(format!("number not representable as f64: {n}"))),
+        serde_json::Value::String(s) => s.parse::<f64>().map(Some).map_err(|e| {
+            D::Error::custom(format!(
+                "expected number or numeric string, got string {s:?}: {e}"
+            ))
+        }),
+        other => Err(D::Error::custom(format!(
+            "expected number or numeric string, got {other}"
+        ))),
+    }
+}
+
+/// `Option<u32>` analogue of `lenient_i64`. Rejects negative numbers and
+/// values exceeding `u32::MAX`.
+fn lenient_u32<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Number(n) => n
+            .as_u64()
+            .filter(|&v| v <= u32::MAX as u64)
+            .map(|v| Some(v as u32))
+            .ok_or_else(|| D::Error::custom(format!("expected u32 (0..={}), got {n}", u32::MAX))),
+        serde_json::Value::String(s) => s.parse::<u32>().map(Some).map_err(|e| {
+            D::Error::custom(format!(
+                "expected unsigned integer or numeric string, got string {s:?}: {e}"
+            ))
+        }),
+        other => Err(D::Error::custom(format!(
+            "expected unsigned integer or numeric string, got {other}"
+        ))),
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -70,9 +156,6 @@ pub struct LoadTraceParams {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExecuteSqlParams {
-    /// Absolute path to the trace file to query against.
-    #[serde(alias = "trace_path")]
-    pub path: String,
     /// SQL query to execute (PerfettoSQL syntax).
     pub sql: String,
 }
@@ -80,9 +163,6 @@ pub struct ExecuteSqlParams {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListTablesParams {
-    /// Absolute path to the trace file.
-    #[serde(alias = "trace_path")]
-    pub path: String,
     /// Optional GLOB pattern to filter table names (e.g. "chrome_*").
     #[serde(default)]
     pub pattern: Option<String>,
@@ -91,31 +171,24 @@ pub struct ListTablesParams {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TableStructureParams {
-    /// Absolute path to the trace file.
-    #[serde(alias = "trace_path")]
-    pub path: String,
-    /// Name of the table to describe.
+    /// Name of the table to describe. Also accepted as `name` for callers
+    /// who model schema discovery around a generic "name" field.
+    #[serde(alias = "name")]
     pub table_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ListProcessesParams {
-    /// Absolute path to the trace file.
-    #[serde(alias = "trace_path")]
-    pub path: String,
-}
+pub struct ListProcessesParams {}
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListThreadsInProcessParams {
-    /// Absolute path to the trace file.
-    #[serde(alias = "trace_path")]
-    pub path: String,
     /// Process upid (the trace-internal unique id from `list_processes`).
     /// Takes precedence over `process_name` when both are set — useful for
     /// disambiguating same-named processes (e.g. multiple Renderer instances).
-    #[serde(default)]
+    /// Accepts both numbers and numeric strings.
+    #[serde(default, deserialize_with = "lenient_i64")]
     pub upid: Option<i64>,
     /// Process name to match exactly (e.g. "com.android.chrome",
     /// "/system/bin/init"). Either this or `upid` must be provided.
@@ -125,18 +198,11 @@ pub struct ListThreadsInProcessParams {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ChromeTraceParams {
-    /// Absolute path to the trace file (must be a Chrome trace).
-    #[serde(alias = "trace_path")]
-    pub path: String,
-}
+pub struct ChromeTraceParams {}
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChromeMainThreadHotspotsParams {
-    /// Absolute path to the trace file (must be a Chrome trace).
-    #[serde(alias = "trace_path")]
-    pub path: String,
     /// Optional process-name filter (e.g. "Renderer", "Browser", "GPU Process").
     /// Useful to scope to one process type without picking a specific instance.
     #[serde(default)]
@@ -144,26 +210,27 @@ pub struct ChromeMainThreadHotspotsParams {
     /// Optional pid filter — the OS-level process ID (visible in Task Manager).
     /// Get pid from `list_processes`. ANDs with the other filters when set.
     /// Note: pids can be recycled within a long trace; prefer `upid` when
-    /// precision matters.
-    #[serde(default)]
+    /// precision matters. Accepts both numbers and numeric strings.
+    #[serde(default, deserialize_with = "lenient_i64")]
     pub pid: Option<i64>,
     /// Optional upid filter — the trace-internal Unique Process ID assigned by
     /// trace_processor (also from `list_processes`). Always uniquely identifies
     /// one process within a trace, even if the OS recycled its pid. Use this
     /// to disambiguate same-named or pid-recycled processes; ANDs with the
-    /// other filters when set.
-    #[serde(default)]
+    /// other filters when set. Accepts both numbers and numeric strings.
+    #[serde(default, deserialize_with = "lenient_i64")]
     pub upid: Option<i64>,
     /// Optional minimum task duration in milliseconds. Defaults to 16 ms (one
     /// 60 Hz frame budget). Pass 0 to see ALL main-thread tasks; raise to e.g.
     /// 33 (30 Hz) or 100 to focus on the worst stutters. Must be a finite
-    /// non-negative number.
-    #[serde(default)]
+    /// non-negative number. Accepts both numbers and numeric strings.
+    #[serde(default, deserialize_with = "lenient_f64")]
     pub min_dur_ms: Option<f64>,
     /// Optional max rows to return. Defaults to 100 and is capped at 5000 to
     /// match `execute_sql`. Lower values keep responses short; higher values
-    /// surface long tails of mid-duration tasks.
-    #[serde(default)]
+    /// surface long tails of mid-duration tasks. Accepts both numbers and
+    /// numeric strings.
+    #[serde(default, deserialize_with = "lenient_u32")]
     pub limit: Option<u32>,
 }
 
@@ -511,7 +578,9 @@ impl PerfettoMcpServer {
         name = "load_trace",
         description = "Load a Perfetto trace file for analysis. This must be called before \
                        any other tools. The `path` should be an absolute path to a \
-                       .perfetto-trace or .pftrace file."
+                       .perfetto-trace or .pftrace file. Sets the current trace — every \
+                       other tool's `path` parameter then defaults to this value, so \
+                       single-trace sessions only need to specify `path` here."
     )]
     async fn load_trace(
         &self,
@@ -526,6 +595,11 @@ impl PerfettoMcpServer {
 
         let display =
             format_loaded_trace_display(&params.path, status.loaded_trace_name.as_deref());
+
+        // Only update current_trace after the client is healthy and status
+        // succeeded — a failed load must not redirect subsequent tools to a
+        // half-loaded trace.
+        *self.current_trace.lock().await = Some(params.path);
 
         Ok(format!(
             "Trace loaded successfully: {display}\n\
@@ -568,7 +642,8 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ExecuteSqlParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.path).await?;
+        let path = self.current_trace_path().await?;
+        let client = self.client_for(&path).await?;
         let table = client
             .query(&params.sql)
             .await
@@ -591,7 +666,8 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ListTablesParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.path).await?;
+        let path = self.current_trace_path().await?;
+        let client = self.client_for(&path).await?;
 
         let sql = match &params.pattern {
             Some(pat) => {
@@ -647,7 +723,8 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<TableStructureParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.path).await?;
+        let path = self.current_trace_path().await?;
+        let client = self.client_for(&path).await?;
         let table_name = sanitize_glob_param(&params.table_name).map_err(|e| e.to_string())?;
 
         let sql = format!("PRAGMA table_info('{table_name}')");
@@ -680,9 +757,10 @@ impl PerfettoMcpServer {
     )]
     async fn list_processes(
         &self,
-        Parameters(params): Parameters<ListProcessesParams>,
+        Parameters(_params): Parameters<ListProcessesParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.path).await?;
+        let path = self.current_trace_path().await?;
+        let client = self.client_for(&path).await?;
         let table = client
             .query("SELECT upid, pid, name, start_ts, end_ts FROM process ORDER BY start_ts")
             .await
@@ -738,7 +816,8 @@ impl PerfettoMcpServer {
                 return Err("Either `upid` or `process_name` must be provided.".to_string());
             }
         };
-        let client = self.client_for(&params.path).await?;
+        let path = self.current_trace_path().await?;
+        let client = self.client_for(&path).await?;
         let table = client
             .query(&sql)
             .await
@@ -762,9 +841,10 @@ impl PerfettoMcpServer {
     )]
     async fn chrome_scroll_jank_summary(
         &self,
-        Parameters(params): Parameters<ChromeTraceParams>,
+        Parameters(_params): Parameters<ChromeTraceParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.path).await?;
+        let path = self.current_trace_path().await?;
+        let client = self.client_for(&path).await?;
         ensure_chrome_trace(&client, "Chrome scroll jank summary").await?;
         let table = client
             .query(CHROME_SCROLL_JANK_SUMMARY_SQL)
@@ -781,9 +861,10 @@ impl PerfettoMcpServer {
     )]
     async fn chrome_page_load_summary(
         &self,
-        Parameters(params): Parameters<ChromeTraceParams>,
+        Parameters(_params): Parameters<ChromeTraceParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.path).await?;
+        let path = self.current_trace_path().await?;
+        let client = self.client_for(&path).await?;
         ensure_chrome_trace(&client, "Chrome page load summary").await?;
         let table = client
             .query(CHROME_PAGE_LOAD_SUMMARY_SQL)
@@ -826,7 +907,8 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ChromeMainThreadHotspotsParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.path).await?;
+        let path = self.current_trace_path().await?;
+        let client = self.client_for(&path).await?;
         ensure_chrome_trace(&client, "Chrome main-thread hotspots").await?;
         let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
             process_name: params.process_name.as_deref(),
@@ -852,9 +934,10 @@ impl PerfettoMcpServer {
     )]
     async fn chrome_startup_summary(
         &self,
-        Parameters(params): Parameters<ChromeTraceParams>,
+        Parameters(_params): Parameters<ChromeTraceParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.path).await?;
+        let path = self.current_trace_path().await?;
+        let client = self.client_for(&path).await?;
         ensure_chrome_trace(&client, "Chrome startup summary").await?;
         let table = client
             .query(CHROME_STARTUP_SUMMARY_SQL)
@@ -873,9 +956,10 @@ impl PerfettoMcpServer {
     )]
     async fn chrome_web_content_interactions(
         &self,
-        Parameters(params): Parameters<ChromeTraceParams>,
+        Parameters(_params): Parameters<ChromeTraceParams>,
     ) -> Result<String, String> {
-        let client = self.client_for(&params.path).await?;
+        let path = self.current_trace_path().await?;
+        let client = self.client_for(&path).await?;
         ensure_chrome_trace(&client, "Chrome web content interactions").await?;
         let table = client
             .query(CHROME_WEB_CONTENT_INTERACTIONS_SQL)
@@ -914,6 +998,7 @@ impl PerfettoMcpServer {
     pub fn new(manager: Arc<TraceProcessorManager>) -> Self {
         Self {
             manager,
+            current_trace: Arc::new(Mutex::new(None)),
             tool_router: Self::tool_router(),
         }
     }
@@ -924,6 +1009,14 @@ impl PerfettoMcpServer {
         let service = self.serve(transport).await?;
         service.waiting().await?;
         Ok(())
+    }
+
+    /// Return the current trace path set by `load_trace`, or a clear error
+    /// directing the caller to `load_trace` when no trace has been loaded.
+    async fn current_trace_path(&self) -> Result<String, String> {
+        self.current_trace.lock().await.clone().ok_or_else(|| {
+            "No trace loaded. Call `load_trace` with an absolute path first.".to_owned()
+        })
     }
 
     /// Resolve a user-provided trace path to a cached client.
@@ -1578,13 +1671,19 @@ mod tests {
             let manager = Arc::new(TraceProcessorManager::new_with_starting_port(1, 19_021));
             let server = PerfettoMcpServer::new(manager);
             let non_chrome_path = "tests/fixtures/basic.perfetto-trace";
-            let mk_params = || {
-                Parameters(ChromeTraceParams {
+            // `load_trace` first so subsequent handlers see a valid current
+            // trace (preflight rejection is then about chrome-vs-non-chrome,
+            // not about "no trace loaded").
+            server
+                .load_trace(Parameters(LoadTraceParams {
                     path: non_chrome_path.to_owned(),
-                })
-            };
+                }))
+                .await
+                .expect("load_trace on non-chrome fixture must succeed");
 
-            let r = server.chrome_scroll_jank_summary(mk_params()).await;
+            let r = server
+                .chrome_scroll_jank_summary(Parameters(ChromeTraceParams {}))
+                .await;
             let err = r
                 .map(|_| ())
                 .expect_err("chrome_scroll_jank_summary: preflight must reject");
@@ -1592,7 +1691,9 @@ mod tests {
             assert!(err.contains("Chrome-family trace"), "got: {err}");
             assert!(err.contains("list_stdlib_modules"), "got: {err}");
 
-            let r = server.chrome_page_load_summary(mk_params()).await;
+            let r = server
+                .chrome_page_load_summary(Parameters(ChromeTraceParams {}))
+                .await;
             let err = r
                 .map(|_| ())
                 .expect_err("chrome_page_load_summary: preflight must reject");
@@ -1602,7 +1703,6 @@ mod tests {
 
             let r = server
                 .chrome_main_thread_hotspots(Parameters(ChromeMainThreadHotspotsParams {
-                    path: non_chrome_path.to_owned(),
                     process_name: None,
                     pid: None,
                     upid: None,
@@ -1617,7 +1717,9 @@ mod tests {
             assert!(err.contains("Chrome-family trace"), "got: {err}");
             assert!(err.contains("list_stdlib_modules"), "got: {err}");
 
-            let r = server.chrome_startup_summary(mk_params()).await;
+            let r = server
+                .chrome_startup_summary(Parameters(ChromeTraceParams {}))
+                .await;
             let err = r
                 .map(|_| ())
                 .expect_err("chrome_startup_summary: preflight must reject");
@@ -1625,7 +1727,9 @@ mod tests {
             assert!(err.contains("Chrome-family trace"), "got: {err}");
             assert!(err.contains("list_stdlib_modules"), "got: {err}");
 
-            let r = server.chrome_web_content_interactions(mk_params()).await;
+            let r = server
+                .chrome_web_content_interactions(Parameters(ChromeTraceParams {}))
+                .await;
             let err = r
                 .map(|_| ())
                 .expect_err("chrome_web_content_interactions: preflight must reject");
@@ -1704,6 +1808,198 @@ mod tests {
         }
     }
 
+    // -- v0.11.3 lenient numeric deserializer tests ----------------------
+    //
+    // Numeric tool params accept both JSON numbers and JSON strings holding
+    // the same value. Motivated by a v0.11.2 Claude Code session that
+    // stringified every numeric argument and bounced 4 times before giving
+    // up entirely. The schema still advertises `integer`/`number` so
+    // well-behaved LLMs see strict types.
+
+    #[test]
+    fn lenient_i64_accepts_number_string_and_null() {
+        #[derive(Deserialize)]
+        struct Wrap {
+            #[serde(default, deserialize_with = "lenient_i64")]
+            v: Option<i64>,
+        }
+        assert_eq!(
+            serde_json::from_str::<Wrap>(r#"{"v": 12800}"#).unwrap().v,
+            Some(12800)
+        );
+        assert_eq!(
+            serde_json::from_str::<Wrap>(r#"{"v": "12800"}"#).unwrap().v,
+            Some(12800)
+        );
+        assert_eq!(
+            serde_json::from_str::<Wrap>(r#"{"v": null}"#).unwrap().v,
+            None
+        );
+        assert_eq!(serde_json::from_str::<Wrap>(r#"{}"#).unwrap().v, None);
+    }
+
+    #[test]
+    fn lenient_i64_rejects_garbage_string() {
+        #[derive(Deserialize)]
+        struct Wrap {
+            #[serde(default, deserialize_with = "lenient_i64")]
+            #[allow(dead_code)]
+            v: Option<i64>,
+        }
+        let err = serde_json::from_str::<Wrap>(r#"{"v": "abc"}"#)
+            .err()
+            .expect("garbage string must error");
+        assert!(
+            err.to_string().contains("integer or numeric string"),
+            "error must be actionable, got: {err}",
+        );
+    }
+
+    #[test]
+    fn lenient_f64_accepts_number_and_string() {
+        #[derive(Deserialize)]
+        struct Wrap {
+            #[serde(default, deserialize_with = "lenient_f64")]
+            v: Option<f64>,
+        }
+        assert_eq!(
+            serde_json::from_str::<Wrap>(r#"{"v": 16.5}"#).unwrap().v,
+            Some(16.5)
+        );
+        assert_eq!(
+            serde_json::from_str::<Wrap>(r#"{"v": "16.5"}"#).unwrap().v,
+            Some(16.5)
+        );
+        // Plain integer literal also coerces (JSON-number → f64) — the
+        // motivating LLM passed `min_dur_ms: "16"`, not `16.0`, so this
+        // path matters.
+        assert_eq!(
+            serde_json::from_str::<Wrap>(r#"{"v": "16"}"#).unwrap().v,
+            Some(16.0)
+        );
+    }
+
+    #[test]
+    fn lenient_u32_accepts_and_rejects_correctly() {
+        #[derive(Deserialize)]
+        struct Wrap {
+            #[serde(default, deserialize_with = "lenient_u32")]
+            v: Option<u32>,
+        }
+        assert_eq!(
+            serde_json::from_str::<Wrap>(r#"{"v": 25}"#).unwrap().v,
+            Some(25)
+        );
+        assert_eq!(
+            serde_json::from_str::<Wrap>(r#"{"v": "25"}"#).unwrap().v,
+            Some(25)
+        );
+        // Negative number — rejected (u32 can't hold it).
+        assert!(serde_json::from_str::<Wrap>(r#"{"v": -1}"#).is_err());
+        // Negative string — rejected by parse::<u32>().
+        assert!(serde_json::from_str::<Wrap>(r#"{"v": "-1"}"#).is_err());
+        // Above u32::MAX — rejected.
+        assert!(serde_json::from_str::<Wrap>(r#"{"v": 4294967296}"#).is_err());
+    }
+
+    /// End-to-end on the actual params type: the v0.11.2 session's failing
+    /// JSON `{pid: "12800", min_dur_ms: "50", limit: "30"}` now deserializes
+    /// successfully into the typed params.
+    #[test]
+    fn chrome_main_thread_hotspots_params_accepts_stringified_numerics() {
+        let p: ChromeMainThreadHotspotsParams =
+            serde_json::from_str(r#"{"pid": "12800", "min_dur_ms": "50", "limit": "30"}"#)
+                .expect("stringified numerics must deserialize after v0.11.3");
+        assert_eq!(p.pid, Some(12800));
+        assert_eq!(p.min_dur_ms, Some(50.0));
+        assert_eq!(p.limit, Some(30));
+    }
+
+    /// JsonSchema must still advertise strict types so well-behaved LLMs
+    /// don't see "string-or-integer" weirdness on `tools/list`. The
+    /// `deserialize_with` is server-side leniency only, invisible to the
+    /// schema. Pin this against the actual `tools/list` payload for
+    /// `chrome_main_thread_hotspots`.
+    #[test]
+    fn schema_for_chrome_hotspots_advertises_strict_numeric_types() {
+        let server = test_server();
+        let tool = server
+            .tool_router
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == "chrome_main_thread_hotspots")
+            .expect("tool must exist");
+        let schema = serde_json::to_value(&tool.input_schema).unwrap();
+        let s = schema.to_string();
+        // Each numeric prop should be the simple type, not a union with
+        // "string". Spot-check the two trickiest fields.
+        assert!(
+            !s.contains(r#""pid":{"type":["string""#) && !s.contains(r#""pid":{"anyOf""#),
+            "pid schema must not advertise string variant: {s}",
+        );
+        assert!(
+            !s.contains(r#""min_dur_ms":{"type":["string""#)
+                && !s.contains(r#""min_dur_ms":{"anyOf""#),
+            "min_dur_ms schema must not advertise string variant: {s}",
+        );
+    }
+
+    // -- v0.11.3 `name` alias on table_name ------------------------------
+
+    #[test]
+    fn list_table_structure_accepts_name_alias() {
+        let from_canonical: TableStructureParams =
+            serde_json::from_str(r#"{"table_name": "slice"}"#)
+                .expect("canonical `table_name` must deserialize");
+        let from_alias: TableStructureParams =
+            serde_json::from_str(r#"{"name": "slice"}"#).expect("alias `name` must deserialize");
+        assert_eq!(from_canonical.table_name, "slice");
+        assert_eq!(from_alias.table_name, "slice");
+    }
+
+    // -- v0.11.3 current_trace state -------------------------------------
+
+    /// With nothing loaded, `current_trace_path` returns a clear actionable
+    /// error pointing the caller at `load_trace`. Every non-`load_trace`
+    /// handler funnels through this, so all of them get the nudge.
+    #[test]
+    fn current_trace_path_errors_clearly_when_no_trace_loaded() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let server = test_server();
+            let err = server.current_trace_path().await.unwrap_err();
+            assert!(
+                err.contains("load_trace"),
+                "error must reference load_trace, got: {err}",
+            );
+        });
+    }
+
+    /// The schema must NOT expose a `path` field on any non-`load_trace`
+    /// tool — that's the central v0.11.3 contract. If anyone re-introduces
+    /// `path` on, say, `execute_sql`, this test catches it on `tools/list`.
+    #[test]
+    fn only_load_trace_advertises_path_field() {
+        let server = test_server();
+        for tool in server.tool_router.list_all() {
+            let schema = serde_json::to_value(&tool.input_schema).unwrap();
+            let props = schema.get("properties").and_then(|p| p.as_object());
+            let has_path = props.map(|p| p.contains_key("path")).unwrap_or(false);
+            if tool.name == "load_trace" {
+                assert!(has_path, "load_trace must advertise `path`");
+            } else {
+                assert!(
+                    !has_path,
+                    "tool `{}` must not advertise `path` (only load_trace does after v0.11.3)",
+                    tool.name,
+                );
+            }
+        }
+    }
+
     /// v0.10.0 reverted `Json<T>` returns to plain `Result<String, String>`
     /// (Claude Code rendered `structured_content` as multi-line pretty-print,
     /// blowing up the conversation UI). With no tool returning `Json<T>`,
@@ -1721,22 +2017,36 @@ mod tests {
         }
     }
 
-    /// v0.11.0 renamed the trace-file param from `trace_path` to `path`
-    /// across every tool's input. Old callers passing `trace_path` must
-    /// still work via `#[serde(alias = "trace_path")]` so v0.10.x scripts
-    /// don't break on upgrade. v0.11.1 added `#[serde(deny_unknown_fields)]`
-    /// to every params type, but serde aliases are recognized as the field
-    /// they alias and so still deserialize — this test pins both halves.
+    /// v0.11.0 renamed the trace-file param from `trace_path` to `path`.
+    /// v0.11.3 then removed `path` from every tool except `load_trace` (the
+    /// remaining tools now read the current trace set by `load_trace`). So
+    /// `load_trace` is the only entry point that needs to honor the legacy
+    /// `trace_path` alias for v0.10.x callers. Pinned here.
     #[test]
-    fn params_accept_trace_path_alias_for_backwards_compat() {
-        let from_path: ExecuteSqlParams =
-            serde_json::from_str(r#"{"path": "/x", "sql": "SELECT 1"}"#)
-                .expect("canonical `path` must deserialize");
-        let from_alias: ExecuteSqlParams =
-            serde_json::from_str(r#"{"trace_path": "/x", "sql": "SELECT 1"}"#)
-                .expect("legacy `trace_path` alias must still deserialize");
+    fn load_trace_accepts_trace_path_alias_for_backwards_compat() {
+        let from_path: LoadTraceParams =
+            serde_json::from_str(r#"{"path": "/x"}"#).expect("canonical `path` must deserialize");
+        let from_alias: LoadTraceParams = serde_json::from_str(r#"{"trace_path": "/x"}"#)
+            .expect("legacy `trace_path` alias must still deserialize");
         assert_eq!(from_path.path, "/x");
         assert_eq!(from_alias.path, "/x");
+    }
+
+    /// v0.11.3 removed `path` from non-`load_trace` tools. v0.10.x callers
+    /// still passing `{path: "..."}` to `execute_sql` must now get a clear
+    /// "unknown field path" error so the caller learns to drop it. This test
+    /// also pins that `trace_path` (the v0.10.x alias) is rejected for the
+    /// same reason — `deny_unknown_fields` no longer recognizes either.
+    #[test]
+    fn execute_sql_rejects_v0_10_x_path_field() {
+        let r = serde_json::from_str::<ExecuteSqlParams>(r#"{"path": "/x", "sql": "SELECT 1"}"#);
+        assert!(r.is_err(), "v0.10.x `path` field must now error, got Ok");
+        let r =
+            serde_json::from_str::<ExecuteSqlParams>(r#"{"trace_path": "/x", "sql": "SELECT 1"}"#);
+        assert!(
+            r.is_err(),
+            "v0.10.x `trace_path` field must now error, got Ok",
+        );
     }
 
     /// `#[serde(deny_unknown_fields)]` makes hallucinated fields fail fast
@@ -1749,7 +2059,7 @@ mod tests {
     #[test]
     fn chrome_main_thread_hotspots_params_rejects_unknown_fields() {
         let err = serde_json::from_str::<ChromeMainThreadHotspotsParams>(
-            r#"{"path": "/x", "threshold_ms": 16, "max_results": 25}"#,
+            r#"{"threshold_ms": 16, "max_results": 25}"#,
         )
         .expect_err("unknown fields must produce an error");
         let msg = err.to_string();
@@ -2069,7 +2379,6 @@ mod tests {
             let server = test_server();
             let r = server
                 .list_threads_in_process(Parameters(ListThreadsInProcessParams {
-                    path: "/nonexistent".to_owned(),
                     upid: None,
                     process_name: None,
                 }))
