@@ -2,6 +2,11 @@
 
 ## perfetto-mcp-rs 0.x Changes
 
+### [0.12.2](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.12.2) (April 30, 2026)
+
+- **`check-update` upgrade hint is platform-aware.** Pre-v0.12.2, the "Behind" branch always emitted the bash form `curl -fsSL … | sh` regardless of platform. PowerShell aliases `curl` to `Invoke-WebRequest`, which rejects `-fsSL` — so a Windows user who copy-pasted the suggested command verbatim got a parameter binding error instead of an upgrade. v0.12.2 detects the platform at compile time via `cfg!(windows)`: the Windows binary now lists BOTH the PowerShell form (`irm … | iex`) and the Git Bash form (because the same `.exe` serves both shells), while Unix binaries keep the single bash form unchanged. Behavior caught by the v0.12.1 smoke test on PowerShell.
+- **2 new unit tests** (`upgrade_hint_unix_form_is_bash_only`, `upgrade_hint_windows_form_lists_both_shells`) pin the platform-specific renderer via a parameterized helper `upgrade_hint_for_platform(is_windows: bool)` so both branches are tested regardless of CI host. 169 lib + 9 integration tests pass; clippy + fmt clean.
+
 ### [0.12.1](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.12.1) (April 30, 2026)
 
 - **crates.io Trusted Publishing**: replaces the static `CARGO_REGISTRY_TOKEN` GitHub secret (90-day expiring) with crates.io OIDC Trusted Publishing — the `publish-crate` workflow job now mints a short-lived registry credential per run via `rust-lang/crates-io-auth-action@v1`. Concrete consequences: (1) no more rotation chore — token never expires because it doesn't exist between runs; (2) blast radius of CI compromise is one job's worth of publish-update on this crate, not 90 days; (3) the `CARGO_REGISTRY_TOKEN` repo secret and the per-crate scoped crates.io token both become unused and can be revoked. Required one-time setup on crates.io (https://crates.io/crates/perfetto-mcp-rs/settings → Trusted Publishers): repository owner `0xZOne`, repo `perfetto-mcp-rs`, workflow filename `release.yml`, no environment.
