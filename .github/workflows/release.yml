@@ -116,3 +116,111 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           gh release edit "$TAG" --notes-file release-notes.md
+
+  update-homebrew-tap:
+    name: Update Homebrew tap formula
+    needs: build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: 0xZOne/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Resolve tag and version
+        id: ver
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download release binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        shell: bash
+        run: |
+          mkdir -p dl
+          gh release download "$TAG" \
+            --repo 0xZOne/perfetto-mcp-rs \
+            --dir dl \
+            --pattern 'perfetto-mcp-rs-darwin-arm64' \
+            --pattern 'perfetto-mcp-rs-darwin-amd64' \
+            --pattern 'perfetto-mcp-rs-linux-arm64' \
+            --pattern 'perfetto-mcp-rs-linux-amd64'
+
+      - name: Compute SHA256 sums
+        id: sums
+        shell: bash
+        run: |
+          cd dl
+          for f in perfetto-mcp-rs-darwin-arm64 perfetto-mcp-rs-darwin-amd64 \
+                  perfetto-mcp-rs-linux-arm64 perfetto-mcp-rs-linux-amd64; do
+            sum=$(shasum -a 256 "$f" | awk '{print $1}')
+            slug=$(echo "$f" | sed 's/perfetto-mcp-rs-//' | tr '-' '_')
+            echo "${slug}=${sum}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Rewrite formula
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          DARWIN_ARM64: ${{ steps.sums.outputs.darwin_arm64 }}
+          DARWIN_AMD64: ${{ steps.sums.outputs.darwin_amd64 }}
+          LINUX_ARM64: ${{ steps.sums.outputs.linux_arm64 }}
+          LINUX_AMD64: ${{ steps.sums.outputs.linux_amd64 }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import pathlib
+
+          formula = pathlib.Path("tap/Formula/perfetto-mcp-rs.rb")
+          src = formula.read_text()
+
+          # Bump version line.
+          src = re.sub(r'^(\s*version\s+)"[^"]*"',
+                       lambda m: f'{m.group(1)}"{os.environ["VERSION"]}"',
+                       src, count=1, flags=re.M)
+
+          # Replace each platform's sha256. The formula has the URL line
+          # immediately followed by sha256 line per platform — we anchor on
+          # the asset name in the URL.
+          replacements = {
+              "perfetto-mcp-rs-darwin-arm64": os.environ["DARWIN_ARM64"],
+              "perfetto-mcp-rs-darwin-amd64": os.environ["DARWIN_AMD64"],
+              "perfetto-mcp-rs-linux-arm64": os.environ["LINUX_ARM64"],
+              "perfetto-mcp-rs-linux-amd64": os.environ["LINUX_AMD64"],
+          }
+          for asset, sha in replacements.items():
+              pattern = (
+                  rf'(url\s+"[^"]*{re.escape(asset)}"\s*\n\s*sha256\s+)"[^"]*"'
+              )
+              src = re.sub(pattern, lambda m, s=sha: f'{m.group(1)}"{s}"', src,
+                           count=1)
+
+          formula.write_text(src)
+          PY
+
+      - name: Lint formula with brew style
+        shell: bash
+        run: brew style ./tap/Formula/perfetto-mcp-rs.rb
+
+      - name: Commit and push
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          cd tap
+          git config user.name "perfetto-mcp-rs release bot"
+          git config user.email "noreply@github.com"
+          if git diff --quiet Formula/perfetto-mcp-rs.rb; then
+            echo "::notice::Formula already at v$VERSION; nothing to push"
+            exit 0
+          fi
+          git add Formula/perfetto-mcp-rs.rb
+          git commit -m "chore: bump perfetto-mcp-rs to v$VERSION"
+          git push origin HEAD:main
