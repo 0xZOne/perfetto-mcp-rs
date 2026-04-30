@@ -274,6 +274,31 @@ pub const CHROME_PAGE_LOAD_SUMMARY_SQL: &str = "INCLUDE PERFETTO MODULE chrome.p
      ORDER BY navigation_start_ts DESC \
      LIMIT 100";
 
+/// Tunable filters for `chrome_main_thread_hotspots_sql`. All fields are
+/// `Option`-of-something so callers can spread `..Default::default()` and
+/// only set the knobs they care about — much more readable than 5 positional
+/// `Option<T>` arguments at the call site.
+///
+/// `Copy` so the builder fn can take it by value without `.clone()` ceremony;
+/// the string borrow makes the whole struct lifetime-parameterized but in
+/// practice every call site has a `'static` literal or a borrow that
+/// outlives the SQL build. Exported for integration tests.
+#[derive(Default, Debug, Clone, Copy)]
+pub struct ChromeMainThreadHotspotsFilters<'a> {
+    /// Optional process-name filter (e.g. "Renderer", "Browser").
+    pub process_name: Option<&'a str>,
+    /// Optional OS pid filter — see `ChromeMainThreadHotspotsParams::pid`.
+    pub pid: Option<i64>,
+    /// Optional trace-internal upid filter — precise even when pid recycles.
+    pub upid: Option<i64>,
+    /// Optional override of the default 16 ms threshold (ms; must be
+    /// finite non-negative, finite when multiplied to ns).
+    pub min_dur_ms: Option<f64>,
+    /// Optional override of the default `LIMIT 100`. Capped at `MAX_ROWS`.
+    /// Must be `> 0` if set.
+    pub limit: Option<u32>,
+}
+
 /// SQL builder for `chrome_main_thread_hotspots`. Exported for integration tests.
 ///
 /// Uses `thread.is_main_thread = 1` (tid == pid in trace_processor).
@@ -282,30 +307,23 @@ pub const CHROME_PAGE_LOAD_SUMMARY_SQL: &str = "INCLUDE PERFETTO MODULE chrome.p
 /// empty rows (no SQL error). If empty, agents can fall back to execute_sql
 /// with `WHERE thread_name IN ('CrBrowserMain', 'CrRendererMain')`.
 ///
-/// Optional filters:
-/// - `process_name` adds `AND ct.process_name = '<name>'`
-/// - `pid` adds `AND p.pid = <pid>` (OS pid; can be recycled mid-trace)
-/// - `upid` adds `AND p.upid = <upid>` (trace-internal unique pid; always
-///   precise even when the OS recycles a pid)
-/// - `min_dur_ms` overrides the default 16 ms threshold (must be a finite
-///   non-negative number; 0 returns all main-thread tasks)
-/// - `limit` overrides the default LIMIT 100 (capped at MAX_ROWS = 5000;
-///   must be > 0)
-///
-/// All filter clauses AND together when set — the redundancy is harmless
-/// (e.g. `upid=3 AND pid=12800` still hits when the pair refers to one
-/// process). The base SQL picks up a `JOIN process p ON ct.upid = p.upid`
-/// so `p.pid` and `p.upid` are referenceable; the join is harmless when no
-/// process filter is present. Defaults preserve the pre-knob behavior so a
-/// `(None, None, None, None, None)` call is byte-equivalent to the legacy
-/// hardcoded SQL save for the `JOIN process` clause.
+/// All set filter clauses AND together — the redundancy is harmless (e.g.
+/// `upid=3 AND pid=12800` still hits when the pair refers to one process).
+/// The base SQL picks up a `JOIN process p ON ct.upid = p.upid` so `p.pid`
+/// and `p.upid` are referenceable; the join is harmless when no process
+/// filter is present. `ChromeMainThreadHotspotsFilters::default()` is
+/// byte-equivalent to the legacy hardcoded SQL save for the `JOIN process`
+/// clause.
 pub fn chrome_main_thread_hotspots_sql(
-    process_name: Option<&str>,
-    pid: Option<i64>,
-    upid: Option<i64>,
-    min_dur_ms: Option<f64>,
-    limit: Option<u32>,
+    filters: ChromeMainThreadHotspotsFilters<'_>,
 ) -> Result<String, PerfettoError> {
+    let ChromeMainThreadHotspotsFilters {
+        process_name,
+        pid,
+        upid,
+        min_dur_ms,
+        limit,
+    } = filters;
     let min_dur_ns: i64 = match min_dur_ms {
         None => 16_000_000,
         Some(ms) => {
@@ -807,13 +825,13 @@ impl PerfettoMcpServer {
     ) -> Result<String, String> {
         let client = self.client_for(&params.path).await?;
         ensure_chrome_trace(&client, "Chrome main-thread hotspots").await?;
-        let sql = chrome_main_thread_hotspots_sql(
-            params.process_name.as_deref(),
-            params.pid,
-            params.upid,
-            params.min_dur_ms,
-            params.limit,
-        )
+        let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            process_name: params.process_name.as_deref(),
+            pid: params.pid,
+            upid: params.upid,
+            min_dur_ms: params.min_dur_ms,
+            limit: params.limit,
+        })
         .map_err(|e| e.to_string())?;
         let table = client
             .query(&sql)
@@ -1768,7 +1786,7 @@ mod tests {
     /// set — this means handlers can always use the same builder.
     #[test]
     fn chrome_main_thread_hotspots_sql_no_filter_runs_all_main_threads() {
-        let sql = chrome_main_thread_hotspots_sql(None, None, None, None, None)
+        let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters::default())
             .expect("builder must succeed");
         assert!(sql.contains("WHERE t.is_main_thread = 1"));
         assert!(sql.contains("AND ct.dur > 16000000"));
@@ -1789,8 +1807,11 @@ mod tests {
 
     #[test]
     fn chrome_main_thread_hotspots_sql_with_pid_emits_filter() {
-        let sql = chrome_main_thread_hotspots_sql(None, Some(12800), None, None, None)
-            .expect("pid-filter builder must succeed");
+        let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            pid: Some(12800),
+            ..Default::default()
+        })
+        .expect("pid-filter builder must succeed");
         assert!(sql.contains("AND p.pid = 12800"), "got: {sql}");
         assert!(
             !sql.contains("ct.process_name ="),
@@ -1806,8 +1827,11 @@ mod tests {
     /// recycles a pid. Adds `AND p.upid = ?` to the WHERE clause.
     #[test]
     fn chrome_main_thread_hotspots_sql_with_upid_emits_filter() {
-        let sql = chrome_main_thread_hotspots_sql(None, None, Some(3), None, None)
-            .expect("upid-filter builder must succeed");
+        let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            upid: Some(3),
+            ..Default::default()
+        })
+        .expect("upid-filter builder must succeed");
         assert!(sql.contains("AND p.upid = 3"), "got: {sql}");
         assert!(
             !sql.contains("p.pid ="),
@@ -1821,8 +1845,11 @@ mod tests {
 
     #[test]
     fn chrome_main_thread_hotspots_sql_with_process_name_emits_filter() {
-        let sql = chrome_main_thread_hotspots_sql(Some("Renderer"), None, None, None, None)
-            .expect("name-filter builder must succeed");
+        let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            process_name: Some("Renderer"),
+            ..Default::default()
+        })
+        .expect("name-filter builder must succeed");
         assert!(
             sql.contains("AND ct.process_name = 'Renderer'"),
             "process_name filter must use sql_string_literal quoting, got: {sql}",
@@ -1831,8 +1858,12 @@ mod tests {
 
     #[test]
     fn chrome_main_thread_hotspots_sql_with_both_filters_ands_them() {
-        let sql = chrome_main_thread_hotspots_sql(Some("Renderer"), Some(12800), None, None, None)
-            .expect("combined-filter builder must succeed");
+        let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            process_name: Some("Renderer"),
+            pid: Some(12800),
+            ..Default::default()
+        })
+        .expect("combined-filter builder must succeed");
         assert!(
             sql.contains("AND ct.process_name = 'Renderer'"),
             "got: {sql}"
@@ -1845,8 +1876,12 @@ mod tests {
     /// list_processes and wants a belt-and-suspenders filter.
     #[test]
     fn chrome_main_thread_hotspots_sql_with_upid_and_pid_emits_both() {
-        let sql = chrome_main_thread_hotspots_sql(None, Some(12800), Some(3), None, None)
-            .expect("upid+pid combined builder must succeed");
+        let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            pid: Some(12800),
+            upid: Some(3),
+            ..Default::default()
+        })
+        .expect("upid+pid combined builder must succeed");
         assert!(sql.contains("AND p.pid = 12800"), "got: {sql}");
         assert!(sql.contains("AND p.upid = 3"), "got: {sql}");
     }
@@ -1856,8 +1891,11 @@ mod tests {
     /// test above.
     #[test]
     fn chrome_main_thread_hotspots_sql_with_min_dur_ms_emits_threshold() {
-        let sql = chrome_main_thread_hotspots_sql(None, None, None, Some(33.0), None)
-            .expect("min_dur_ms builder must succeed");
+        let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            min_dur_ms: Some(33.0),
+            ..Default::default()
+        })
+        .expect("min_dur_ms builder must succeed");
         assert!(
             sql.contains("AND ct.dur > 33000000"),
             "min_dur_ms must convert ms→ns, got: {sql}",
@@ -1873,15 +1911,21 @@ mod tests {
     /// (which `chrome_tasks` shouldn't have anyway).
     #[test]
     fn chrome_main_thread_hotspots_sql_with_min_dur_ms_zero_emits_zero_threshold() {
-        let sql = chrome_main_thread_hotspots_sql(None, None, None, Some(0.0), None)
-            .expect("zero threshold must be accepted");
+        let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            min_dur_ms: Some(0.0),
+            ..Default::default()
+        })
+        .expect("zero threshold must be accepted");
         assert!(sql.contains("AND ct.dur > 0"), "got: {sql}");
     }
 
     #[test]
     fn chrome_main_thread_hotspots_sql_rejects_negative_min_dur_ms() {
-        let err = chrome_main_thread_hotspots_sql(None, None, None, Some(-1.0), None)
-            .expect_err("negative min_dur_ms must error");
+        let err = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            min_dur_ms: Some(-1.0),
+            ..Default::default()
+        })
+        .expect_err("negative min_dur_ms must error");
         assert!(
             err.to_string().contains("min_dur_ms"),
             "error must mention min_dur_ms, got: {err}",
@@ -1890,8 +1934,11 @@ mod tests {
 
     #[test]
     fn chrome_main_thread_hotspots_sql_rejects_nan_min_dur_ms() {
-        let err = chrome_main_thread_hotspots_sql(None, None, None, Some(f64::NAN), None)
-            .expect_err("NaN min_dur_ms must error");
+        let err = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            min_dur_ms: Some(f64::NAN),
+            ..Default::default()
+        })
+        .expect_err("NaN min_dur_ms must error");
         assert!(
             err.to_string().contains("min_dur_ms"),
             "error must mention min_dur_ms, got: {err}",
@@ -1904,8 +1951,11 @@ mod tests {
     /// the overflow guard fires before the cast and surfaces the failure.
     #[test]
     fn chrome_main_thread_hotspots_sql_rejects_min_dur_ms_overflowing_i64_ns() {
-        let err = chrome_main_thread_hotspots_sql(None, None, None, Some(1e20), None)
-            .expect_err("min_dur_ms that overflows i64 ns must error");
+        let err = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            min_dur_ms: Some(1e20),
+            ..Default::default()
+        })
+        .expect_err("min_dur_ms that overflows i64 ns must error");
         assert!(
             err.to_string().contains("min_dur_ms"),
             "error must mention min_dur_ms, got: {err}",
@@ -1918,8 +1968,11 @@ mod tests {
     /// enough not to false-reject any real-world threshold.
     #[test]
     fn chrome_main_thread_hotspots_sql_accepts_min_dur_ms_just_under_i64_ns_overflow() {
-        let sql = chrome_main_thread_hotspots_sql(None, None, None, Some(9e12), None)
-            .expect("near-boundary min_dur_ms must accept");
+        let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            min_dur_ms: Some(9e12),
+            ..Default::default()
+        })
+        .expect("near-boundary min_dur_ms must accept");
         assert!(
             sql.contains("AND ct.dur > 9000000000000000000"),
             "9e12 ms must convert to 9e18 ns in the WHERE clause, got: {sql}",
@@ -1928,8 +1981,11 @@ mod tests {
 
     #[test]
     fn chrome_main_thread_hotspots_sql_with_limit_overrides_default() {
-        let sql = chrome_main_thread_hotspots_sql(None, None, None, None, Some(25))
-            .expect("limit builder must succeed");
+        let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            limit: Some(25),
+            ..Default::default()
+        })
+        .expect("limit builder must succeed");
         assert!(
             sql.contains("ORDER BY ct.dur DESC LIMIT 25"),
             "explicit limit must replace LIMIT 100 default, got: {sql}",
@@ -1944,8 +2000,11 @@ mod tests {
     /// `execute_sql`'s row cap (don't dump unbounded JSON to the LLM).
     #[test]
     fn chrome_main_thread_hotspots_sql_clamps_limit_to_max_rows() {
-        let sql = chrome_main_thread_hotspots_sql(None, None, None, None, Some(99_999))
-            .expect("oversized limit must clamp, not error");
+        let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            limit: Some(99_999),
+            ..Default::default()
+        })
+        .expect("oversized limit must clamp, not error");
         assert!(
             sql.contains(&format!("LIMIT {MAX_ROWS}")),
             "limit must clamp to MAX_ROWS={MAX_ROWS}, got: {sql}",
@@ -1954,8 +2013,11 @@ mod tests {
 
     #[test]
     fn chrome_main_thread_hotspots_sql_rejects_zero_limit() {
-        let err = chrome_main_thread_hotspots_sql(None, None, None, None, Some(0))
-            .expect_err("limit=0 must error");
+        let err = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
+            limit: Some(0),
+            ..Default::default()
+        })
+        .expect_err("limit=0 must error");
         assert!(
             err.to_string().contains("limit"),
             "error must mention limit, got: {err}",
