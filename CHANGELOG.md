@@ -2,6 +2,12 @@
 
 ## perfetto-mcp-rs 0.x Changes
 
+### [0.12.1](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.12.1) (April 30, 2026)
+
+- **crates.io Trusted Publishing**: replaces the static `CARGO_REGISTRY_TOKEN` GitHub secret (90-day expiring) with crates.io OIDC Trusted Publishing — the `publish-crate` workflow job now mints a short-lived registry credential per run via `rust-lang/crates-io-auth-action@v1`. Concrete consequences: (1) no more rotation chore — token never expires because it doesn't exist between runs; (2) blast radius of CI compromise is one job's worth of publish-update on this crate, not 90 days; (3) the `CARGO_REGISTRY_TOKEN` repo secret and the per-crate scoped crates.io token both become unused and can be revoked. Required one-time setup on crates.io (https://crates.io/crates/perfetto-mcp-rs/settings → Trusted Publishers): repository owner `0xZOne`, repo `perfetto-mcp-rs`, workflow filename `release.yml`, no environment.
+- **`publish-crate` job idempotency guard**: the job now hits `https://crates.io/api/v1/crates/perfetto-mcp-rs/<version>` anonymously before attempting `cargo publish`. If the version already exists the job emits a `::notice::` and exits success rather than failing with `error: crate perfetto-mcp-rs@<version> already exists`. Prompted by the v0.12.0 release where the first `cargo publish` was manual (to claim the crate name + verify metadata) and the subsequent CI publish-crate job failed with that exact "already exists" — cosmetically red but operationally fine. Future re-tags or any other manual-then-CI bootstrap path now reduces to a clean skip.
+- **No code changes** (Rust source unchanged at v0.12.0). Net diff: `release.yml` `publish-crate` job (+27 / -3 lines), `Cargo.toml` version bump, this CHANGELOG entry. 167 lib tests + 9 integration tests still pass; clippy + fmt clean.
+
 ### [0.12.0](https://github.com/0xZOne/perfetto-mcp-rs/releases/tag/v0.12.0) (April 30, 2026)
 
 - **`check-update` subcommand**: `perfetto-mcp-rs check-update` queries `https://api.github.com/repos/0xZOne/perfetto-mcp-rs/releases/latest`, compares against the local `CARGO_PKG_VERSION` via `semver` crate, and reports the verdict on stdout. Exit codes pin the contract for shell-prompt and CI integrations: `0` (up to date or ahead of releases — local dev build), `2` (newer release exists), `1` (network or parse error). New module `src/check_update.rs` splits HTTP fetch from pure JSON parse / version compare / render so the decision logic is unit-testable without network. 14 new tests; 167 lib tests pass.
