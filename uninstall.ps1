@@ -1,7 +1,7 @@
 # Uninstall perfetto-mcp-rs and deregister it from Claude Code / Codex.
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.ps1 | iex
+#   irm https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/uninstall.ps1 | iex
 #
 # Environment overrides:
 #   $env:INSTALL_DIR   Where the binary lives (default: $HOME\.local\bin)

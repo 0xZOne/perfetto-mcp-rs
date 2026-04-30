@@ -1,14 +1,14 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/assets/brand/logo-wordmark.svg" width="820" alt="perfetto-mcp-rs logo">
+  <img src="https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/assets/brand/logo-wordmark.svg" width="820" alt="perfetto-mcp-rs logo">
 </p>
 
 # perfetto-mcp-rs
 
-[![CI](https://github.com/0xZOne/perfetto-mcp-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/0xZOne/perfetto-mcp-rs/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/0xZOne/perfetto-mcp-rs)](https://github.com/0xZOne/perfetto-mcp-rs/releases)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/LICENSE-MIT)
+[![CI](https://github.com/tooluse-labs/perfetto-mcp-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/tooluse-labs/perfetto-mcp-rs/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/tooluse-labs/perfetto-mcp-rs)](https://github.com/tooluse-labs/perfetto-mcp-rs/releases)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/tooluse-labs/perfetto-mcp-rs/blob/main/LICENSE-MIT)
 
-**English** | [简体中文](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/README.zh-CN.md)
+**English** | [简体中文](https://github.com/tooluse-labs/perfetto-mcp-rs/blob/main/README.zh-CN.md)
 
 An [MCP](https://modelcontextprotocol.io) server for analyzing
 [Perfetto](https://perfetto.dev) traces with LLMs. Point Claude Code (or any
@@ -31,7 +31,7 @@ LLM through the typical `load_trace` → `list_tables` → `list_table_structure
 **macOS / Linux (Homebrew, recommended):**
 
 ```sh
-brew tap 0xZOne/tap
+brew tap tooluse-labs/tap
 brew install perfetto-mcp-rs
 # brew prints caveats; run the printed line to register with Claude Code / Codex:
 perfetto-mcp-rs install --binary-path "$(brew --prefix)/bin/perfetto-mcp-rs"
@@ -47,13 +47,13 @@ perfetto-mcp-rs install --binary-path "$(which perfetto-mcp-rs)"
 **Linux / macOS / Windows (Git Bash, MSYS2, Cygwin) — direct script:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.ps1 | iex
 ```
 
 Both installers drop the prebuilt binary into `~/.local/bin` (or
@@ -66,7 +66,7 @@ directory). For a project-local install, set `SCOPE=local` (or `project`) and
 run the script from that project's directory:
 
 ```sh
-SCOPE=local bash -c 'curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh'
+SCOPE=local bash -c 'curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.sh | sh'
 ```
 
 PowerShell equivalent: `$env:SCOPE = 'local'; irm ... | iex`. Codex has no
@@ -74,7 +74,7 @@ scope concept and ignores this variable.
 
 Supported platforms: linux amd64/arm64, macOS amd64/arm64, Windows amd64.
 If you'd rather not run a script, grab the binary directly from the
-[releases page](https://github.com/0xZOne/perfetto-mcp-rs/releases). Release
+[releases page](https://github.com/tooluse-labs/perfetto-mcp-rs/releases). Release
 assets are named `perfetto-mcp-rs-<platform>` (e.g. `perfetto-mcp-rs-linux-amd64`);
 rename or address the downloaded file explicitly when invoking `install`, and
 on Unix mark it executable first (`chmod +x`) — the subcommand refuses
@@ -83,7 +83,7 @@ non-executable paths to avoid writing a broken MCP entry. Example:
 ```sh
 # Linux amd64 example — adjust the asset name for your platform.
 curl -fsSL -o perfetto-mcp-rs \
-  https://github.com/0xZOne/perfetto-mcp-rs/releases/latest/download/perfetto-mcp-rs-linux-amd64
+  https://github.com/tooluse-labs/perfetto-mcp-rs/releases/latest/download/perfetto-mcp-rs-linux-amd64
 chmod +x perfetto-mcp-rs
 ./perfetto-mcp-rs install --scope user --binary-path "$PWD/perfetto-mcp-rs"
 ```
@@ -97,7 +97,7 @@ re-registers the MCP server with Claude Code / Codex idempotently.
 Pin to a specific version with the `--version` flag:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh -s -- --version v0.7.0
+curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.sh | sh -s -- --version v0.7.0
 ```
 
 The `VERSION` env var also works, but **must come immediately before `sh`**
@@ -105,14 +105,14 @@ The `VERSION` env var also works, but **must come immediately before `sh`**
 ... | sh` puts `VERSION` on `curl`, not on the piped `sh`):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | VERSION=v0.7.0 sh
+curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.sh | VERSION=v0.7.0 sh
 ```
 
 PowerShell — set `$env:VERSION` in the same line, since `iex` runs in the
 current session:
 
 ```powershell
-$env:VERSION = 'v0.7.0'; irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.ps1 | iex
+$env:VERSION = 'v0.7.0'; irm https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.ps1 | iex
 ```
 
 No auto-update daemon — upgrades are explicit.
@@ -134,13 +134,13 @@ removes the binary, and deletes the cached `trace_processor_shell`. Idempotent
 **Linux / macOS / Windows (Git Bash, MSYS2, Cygwin):**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.sh | sh
+curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/uninstall.sh | sh
 ```
 
 **Windows (PowerShell) — close Claude Code, Codex, or anything else using the `.exe` first:**
 
 ```powershell
-irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/uninstall.ps1 | iex
 ```
 
 **Scoped installs (local / project)**: `claude` stores local/project entries
@@ -151,7 +151,7 @@ the wrapper still removes the binary and cache:
 ```sh
 # Ran `SCOPE=local bash install.sh` in ~/work/foo earlier? Then:
 cd ~/work/foo
-SCOPE=local bash -c 'curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.sh | sh'
+SCOPE=local bash -c 'curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/uninstall.sh | sh'
 ```
 
 PowerShell equivalent: `cd <original-project-dir>; $env:SCOPE = 'local'; irm ... | iex`.
@@ -267,7 +267,7 @@ choco install protoc
 Then:
 
 ```sh
-git clone https://github.com/0xZOne/perfetto-mcp-rs
+git clone https://github.com/tooluse-labs/perfetto-mcp-rs
 cd perfetto-mcp-rs
 cargo build --release
 # Binary at target/release/perfetto-mcp-rs
@@ -283,6 +283,6 @@ cargo fmt           # format
 
 ## License
 
-Dual-licensed under either of [Apache License, Version 2.0](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/LICENSE-APACHE) or
-[MIT license](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/LICENSE-MIT) at your option. Contributions are accepted under
+Dual-licensed under either of [Apache License, Version 2.0](https://github.com/tooluse-labs/perfetto-mcp-rs/blob/main/LICENSE-APACHE) or
+[MIT license](https://github.com/tooluse-labs/perfetto-mcp-rs/blob/main/LICENSE-MIT) at your option. Contributions are accepted under
 the same terms.

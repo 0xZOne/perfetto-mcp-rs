@@ -62,15 +62,15 @@ spec:
       description: "Aggregate Chrome web-content input interactions (INP latencies)."
 
 documentation:
-  homepage: "https://github.com/0xZOne/perfetto-mcp-rs"
+  homepage: "https://github.com/tooluse-labs/perfetto-mcp-rs"
   readme: "README.md"
   install:
     - name: cargo
       command: "cargo install perfetto-mcp-rs"
     - name: homebrew
-      command: "brew tap 0xZOne/tap && brew install perfetto-mcp-rs"
+      command: "brew tap tooluse-labs/tap && brew install perfetto-mcp-rs"
     - name: curl
-      command: "curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh"
+      command: "curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.sh | sh"
 
 deployment:
   category: "developer-tools"

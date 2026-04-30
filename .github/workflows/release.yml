@@ -124,7 +124,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          repository: 0xZOne/homebrew-tap
+          repository: tooluse-labs/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
 
@@ -145,7 +145,7 @@ jobs:
         run: |
           mkdir -p dl
           gh release download "$TAG" \
-            --repo 0xZOne/perfetto-mcp-rs \
+            --repo tooluse-labs/perfetto-mcp-rs \
             --dir dl \
             --pattern 'perfetto-mcp-rs-darwin-arm64' \
             --pattern 'perfetto-mcp-rs-darwin-amd64' \

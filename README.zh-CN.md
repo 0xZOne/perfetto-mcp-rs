@@ -1,14 +1,14 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/assets/brand/logo-wordmark.svg" width="820" alt="perfetto-mcp-rs logo">
+  <img src="https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/assets/brand/logo-wordmark.svg" width="820" alt="perfetto-mcp-rs logo">
 </p>
 
 # perfetto-mcp-rs
 
-[![CI](https://github.com/0xZOne/perfetto-mcp-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/0xZOne/perfetto-mcp-rs/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/0xZOne/perfetto-mcp-rs)](https://github.com/0xZOne/perfetto-mcp-rs/releases)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/LICENSE-MIT)
+[![CI](https://github.com/tooluse-labs/perfetto-mcp-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/tooluse-labs/perfetto-mcp-rs/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/tooluse-labs/perfetto-mcp-rs)](https://github.com/tooluse-labs/perfetto-mcp-rs/releases)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/tooluse-labs/perfetto-mcp-rs/blob/main/LICENSE-MIT)
 
-[English](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/README.md) | **简体中文**
+[English](https://github.com/tooluse-labs/perfetto-mcp-rs/blob/main/README.md) | **简体中文**
 
 让 LLM 读懂 [Perfetto](https://perfetto.dev) trace 的
 [MCP](https://modelcontextprotocol.io) 服务器。在 Claude Code（或任何支持
@@ -31,7 +31,7 @@ Codex、Claude Desktop、Cursor 等）。这类客户端会沿着错误消息的
 **macOS / Linux (Homebrew，推荐)：**
 
 ```sh
-brew tap 0xZOne/tap
+brew tap tooluse-labs/tap
 brew install perfetto-mcp-rs
 # brew 会打印一段 caveats；按提示跑下面这条把自己注册到 Claude Code / Codex：
 perfetto-mcp-rs install --binary-path "$(brew --prefix)/bin/perfetto-mcp-rs"
@@ -47,13 +47,13 @@ perfetto-mcp-rs install --binary-path "$(which perfetto-mcp-rs)"
 **Linux / macOS / Windows（Git Bash、MSYS2、Cygwin）—— 直接脚本：**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.sh | sh
 ```
 
 **Windows（PowerShell）：**
 
 ```powershell
-irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.ps1 | iex
 ```
 
 两种安装方式都会把二进制下载到 `~/.local/bin`（Windows 上是
@@ -66,14 +66,14 @@ Code 和/或 Codex，也会顺手自动注册。Claude Code 重启后生效，Co
 运行脚本：
 
 ```sh
-SCOPE=local bash -c 'curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh'
+SCOPE=local bash -c 'curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.sh | sh'
 ```
 
 PowerShell 等价：`$env:SCOPE = 'local'; irm ... | iex`。Codex 没有 scope
 概念，会忽略这个变量。
 
 支持平台：linux amd64/arm64、macOS amd64/arm64、Windows amd64。
-不想跑脚本的话，直接去 [releases 页面](https://github.com/0xZOne/perfetto-mcp-rs/releases)
+不想跑脚本的话，直接去 [releases 页面](https://github.com/tooluse-labs/perfetto-mcp-rs/releases)
 下对应平台的二进制。Release 资产名是 `perfetto-mcp-rs-<platform>`（例如
 `perfetto-mcp-rs-linux-amd64`），下载后 **Unix 上必须先 `chmod +x`**（子命令
 会拒绝无执行位的路径，防止写入无法启动的 MCP 条目）。示例：
@@ -81,7 +81,7 @@ PowerShell 等价：`$env:SCOPE = 'local'; irm ... | iex`。Codex 没有 scope
 ```sh
 # Linux amd64 示例 —— 其它平台替换资产名。
 curl -fsSL -o perfetto-mcp-rs \
-  https://github.com/0xZOne/perfetto-mcp-rs/releases/latest/download/perfetto-mcp-rs-linux-amd64
+  https://github.com/tooluse-labs/perfetto-mcp-rs/releases/latest/download/perfetto-mcp-rs-linux-amd64
 chmod +x perfetto-mcp-rs
 ./perfetto-mcp-rs install --scope user --binary-path "$PWD/perfetto-mcp-rs"
 ```
@@ -94,7 +94,7 @@ chmod +x perfetto-mcp-rs
 用 `--version` flag 指定特定版本（推荐，避开 shell pipe 的 env var 陷阱）：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh -s -- --version v0.7.0
+curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.sh | sh -s -- --version v0.7.0
 ```
 
 `VERSION` 环境变量也支持，但**必须紧贴 `sh` 写**（POSIX 的
@@ -102,13 +102,13 @@ curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install
 是给了 curl，不会传到管道后的 sh）：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | VERSION=v0.7.0 sh
+curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.sh | VERSION=v0.7.0 sh
 ```
 
 PowerShell 直接在同一行设 `$env:VERSION`，`iex` 在当前 session 里执行能看到：
 
 ```powershell
-$env:VERSION = 'v0.7.0'; irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.ps1 | iex
+$env:VERSION = 'v0.7.0'; irm https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.ps1 | iex
 ```
 
 无后台自动更新——升级由用户显式触发。
@@ -129,13 +129,13 @@ perfetto-mcp-rs check-update
 **Linux / macOS / Windows（Git Bash、MSYS2、Cygwin）：**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.sh | sh
+curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/uninstall.sh | sh
 ```
 
 **Windows（PowerShell）—— 先关掉 Claude Code、Codex 或任何正在占用 `.exe` 的进程：**
 
 ```powershell
-irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.ps1 | iex
+irm https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/uninstall.ps1 | iex
 ```
 
 **Scoped 安装（local / project）**：Claude 的 local/project 注册按项目目录索引，
@@ -145,7 +145,7 @@ irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.ps1 
 ```sh
 # 先前在 ~/work/foo 里跑过 `SCOPE=local bash install.sh`？那就：
 cd ~/work/foo
-SCOPE=local bash -c 'curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.sh | sh'
+SCOPE=local bash -c 'curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/uninstall.sh | sh'
 ```
 
 PowerShell 等价：`cd <原项目目录>; $env:SCOPE = 'local'; irm ... | iex`。
@@ -258,7 +258,7 @@ choco install protoc
 然后：
 
 ```sh
-git clone https://github.com/0xZOne/perfetto-mcp-rs
+git clone https://github.com/tooluse-labs/perfetto-mcp-rs
 cd perfetto-mcp-rs
 cargo build --release
 # 二进制在 target/release/perfetto-mcp-rs
@@ -274,5 +274,5 @@ cargo fmt           # 格式化
 
 ## 许可证
 
-双协议授权：[Apache 2.0](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/LICENSE-APACHE) 或 [MIT](https://github.com/0xZOne/perfetto-mcp-rs/blob/main/LICENSE-MIT)，任选其一
+双协议授权：[Apache 2.0](https://github.com/tooluse-labs/perfetto-mcp-rs/blob/main/LICENSE-APACHE) 或 [MIT](https://github.com/tooluse-labs/perfetto-mcp-rs/blob/main/LICENSE-MIT)，任选其一
 即可。向本仓库提交的代码默认按同样的双协议发布。

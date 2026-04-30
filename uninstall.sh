@@ -2,7 +2,7 @@
 # Uninstall perfetto-mcp-rs and deregister it from Claude Code / Codex.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/uninstall.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/uninstall.sh | sh
 #
 # Environment overrides:
 #   INSTALL_DIR   Where the binary lives (default: $HOME/.local/bin)

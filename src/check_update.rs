@@ -18,7 +18,7 @@ use semver::Version;
 use serde::Deserialize;
 
 const RELEASES_LATEST_URL: &str =
-    "https://api.github.com/repos/0xZOne/perfetto-mcp-rs/releases/latest";
+    "https://api.github.com/repos/tooluse-labs/perfetto-mcp-rs/releases/latest";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The `tag_name` and `published_at` fields from the GitHub /releases/latest
@@ -133,9 +133,9 @@ fn compare(current: Version, latest: Version, published_at: String) -> Outcome {
 }
 
 const UPGRADE_BASH: &str =
-    "curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh";
+    "curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.sh | sh";
 const UPGRADE_POWERSHELL: &str =
-    "irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.ps1 | iex";
+    "irm https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.ps1 | iex";
 
 /// The Windows binary serves both PowerShell and Git Bash users — list both
 /// upgrade commands so a copy-paste on either shell just works. PowerShell

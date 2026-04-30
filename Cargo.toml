@@ -1,12 +1,12 @@
 [package]
 name = "perfetto-mcp-rs"
-version = "0.12.3"
+version = "0.13.0"
 edition = "2021"
 description = "MCP server for Perfetto trace analysis"
 authors = ["The perfetto-mcp-rs Authors"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/0xZOne/perfetto-mcp-rs"
-homepage = "https://github.com/0xZOne/perfetto-mcp-rs"
+repository = "https://github.com/tooluse-labs/perfetto-mcp-rs"
+homepage = "https://github.com/tooluse-labs/perfetto-mcp-rs"
 readme = "README.md"
 keywords = ["perfetto", "mcp", "trace", "tracing", "claude"]
 categories = ["development-tools::profiling", "command-line-utilities"]

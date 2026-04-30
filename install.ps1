@@ -1,11 +1,11 @@
 # Install perfetto-mcp-rs and register it with Claude Code / Codex.
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.ps1 | iex
 #
 # Environment overrides:
 #   $env:INSTALL_DIR   Where to place the binary (default: $HOME\.local\bin)
-#   $env:REPO          GitHub slug to download from (default: 0xZOne/perfetto-mcp-rs)
+#   $env:REPO          GitHub slug to download from (default: tooluse-labs/perfetto-mcp-rs)
 #   $env:VERSION       Release tag to install (default: latest)
 #   $env:SCOPE         Claude scope: user|local|project (default: user). For
 #                      local/project, run this script from the target project dir.
@@ -21,7 +21,7 @@ function Install-PerfettoMcp {
     # it, and Windows 10/11's TLS 1.2+ default is fine without it.
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
-    $repo       = if ($env:REPO)        { $env:REPO }        else { '0xZOne/perfetto-mcp-rs' }
+    $repo       = if ($env:REPO)        { $env:REPO }        else { 'tooluse-labs/perfetto-mcp-rs' }
     $installDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { Join-Path $HOME '.local\bin' }
     $version    = if ($env:VERSION)     { $env:VERSION }     else { 'latest' }
     $asset      = 'perfetto-mcp-rs-windows-amd64.exe'
