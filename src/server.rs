@@ -576,11 +576,12 @@ pub const STDLIB_MODULE_LIST: &str = r#"[
 impl PerfettoMcpServer {
     #[tool(
         name = "load_trace",
-        description = "Load a Perfetto trace file for analysis. This must be called before \
-                       any other tools. The `path` should be an absolute path to a \
-                       .perfetto-trace or .pftrace file. Sets the current trace — every \
-                       other tool's `path` parameter then defaults to this value, so \
-                       single-trace sessions only need to specify `path` here."
+        description = "Load a Perfetto trace file for analysis. This is the only tool that \
+                       takes a `path` — every subsequent tool operates on the current trace \
+                       set here. The `path` must be an absolute path to a .perfetto-trace \
+                       or .pftrace file. To analyze a different trace, call `load_trace` \
+                       again with the new path (cached `trace_processor_shell` instances \
+                       make repeat loads near-zero-cost)."
     )]
     async fn load_trace(
         &self,
@@ -610,10 +611,9 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "execute_sql",
-        description = "Execute a PerfettoSQL query against a loaded trace. Results are capped \
-                       at 5000 rows and aggregates are strongly preferred over raw row data.\n\
-                       \n\
-                       The `path` must reference a previously loaded trace.\n\
+        description = "Execute a PerfettoSQL query against the current loaded trace. Results \
+                       are capped at 5000 rows and aggregates are strongly preferred over \
+                       raw row data. Requires `load_trace` to have been called first.\n\
                        \n\
                        Call `list_stdlib_modules` (no trace needed) to see curated modules \
                        with usage examples. The dedicated chrome_* tools cover the most \
@@ -642,8 +642,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ExecuteSqlParams>,
     ) -> Result<String, String> {
-        let path = self.current_trace_path().await?;
-        let client = self.client_for(&path).await?;
+        let client = self.client_for_current().await?;
         let table = client
             .query(&params.sql)
             .await
@@ -666,8 +665,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ListTablesParams>,
     ) -> Result<String, String> {
-        let path = self.current_trace_path().await?;
-        let client = self.client_for(&path).await?;
+        let client = self.client_for_current().await?;
 
         let sql = match &params.pattern {
             Some(pat) => {
@@ -723,8 +721,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<TableStructureParams>,
     ) -> Result<String, String> {
-        let path = self.current_trace_path().await?;
-        let client = self.client_for(&path).await?;
+        let client = self.client_for_current().await?;
         let table_name = sanitize_glob_param(&params.table_name).map_err(|e| e.to_string())?;
 
         let sql = format!("PRAGMA table_info('{table_name}')");
@@ -759,8 +756,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(_params): Parameters<ListProcessesParams>,
     ) -> Result<String, String> {
-        let path = self.current_trace_path().await?;
-        let client = self.client_for(&path).await?;
+        let client = self.client_for_current().await?;
         let table = client
             .query("SELECT upid, pid, name, start_ts, end_ts FROM process ORDER BY start_ts")
             .await
@@ -816,8 +812,7 @@ impl PerfettoMcpServer {
                 return Err("Either `upid` or `process_name` must be provided.".to_string());
             }
         };
-        let path = self.current_trace_path().await?;
-        let client = self.client_for(&path).await?;
+        let client = self.client_for_current().await?;
         let table = client
             .query(&sql)
             .await
@@ -843,8 +838,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(_params): Parameters<ChromeTraceParams>,
     ) -> Result<String, String> {
-        let path = self.current_trace_path().await?;
-        let client = self.client_for(&path).await?;
+        let client = self.client_for_current().await?;
         ensure_chrome_trace(&client, "Chrome scroll jank summary").await?;
         let table = client
             .query(CHROME_SCROLL_JANK_SUMMARY_SQL)
@@ -863,8 +857,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(_params): Parameters<ChromeTraceParams>,
     ) -> Result<String, String> {
-        let path = self.current_trace_path().await?;
-        let client = self.client_for(&path).await?;
+        let client = self.client_for_current().await?;
         ensure_chrome_trace(&client, "Chrome page load summary").await?;
         let table = client
             .query(CHROME_PAGE_LOAD_SUMMARY_SQL)
@@ -907,8 +900,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(params): Parameters<ChromeMainThreadHotspotsParams>,
     ) -> Result<String, String> {
-        let path = self.current_trace_path().await?;
-        let client = self.client_for(&path).await?;
+        let client = self.client_for_current().await?;
         ensure_chrome_trace(&client, "Chrome main-thread hotspots").await?;
         let sql = chrome_main_thread_hotspots_sql(ChromeMainThreadHotspotsFilters {
             process_name: params.process_name.as_deref(),
@@ -936,8 +928,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(_params): Parameters<ChromeTraceParams>,
     ) -> Result<String, String> {
-        let path = self.current_trace_path().await?;
-        let client = self.client_for(&path).await?;
+        let client = self.client_for_current().await?;
         ensure_chrome_trace(&client, "Chrome startup summary").await?;
         let table = client
             .query(CHROME_STARTUP_SUMMARY_SQL)
@@ -958,8 +949,7 @@ impl PerfettoMcpServer {
         &self,
         Parameters(_params): Parameters<ChromeTraceParams>,
     ) -> Result<String, String> {
-        let path = self.current_trace_path().await?;
-        let client = self.client_for(&path).await?;
+        let client = self.client_for_current().await?;
         ensure_chrome_trace(&client, "Chrome web content interactions").await?;
         let table = client
             .query(CHROME_WEB_CONTENT_INTERACTIONS_SQL)
@@ -1017,6 +1007,14 @@ impl PerfettoMcpServer {
         self.current_trace.lock().await.clone().ok_or_else(|| {
             "No trace loaded. Call `load_trace` with an absolute path first.".to_owned()
         })
+    }
+
+    /// One-shot "current trace → cached client" used by every non-`load_trace`
+    /// handler. Centralizes the two-step preamble so tool descriptions and
+    /// future telemetry/retry hooks have one site to wire into.
+    async fn client_for_current(&self) -> Result<crate::tp_client::TraceProcessorClient, String> {
+        let path = self.current_trace_path().await?;
+        self.client_for(&path).await
     }
 
     /// Resolve a user-provided trace path to a cached client.
@@ -1930,18 +1928,58 @@ mod tests {
             .find(|t| t.name == "chrome_main_thread_hotspots")
             .expect("tool must exist");
         let schema = serde_json::to_value(&tool.input_schema).unwrap();
-        let s = schema.to_string();
-        // Each numeric prop should be the simple type, not a union with
-        // "string". Spot-check the two trickiest fields.
-        assert!(
-            !s.contains(r#""pid":{"type":["string""#) && !s.contains(r#""pid":{"anyOf""#),
-            "pid schema must not advertise string variant: {s}",
-        );
-        assert!(
-            !s.contains(r#""min_dur_ms":{"type":["string""#)
-                && !s.contains(r#""min_dur_ms":{"anyOf""#),
-            "min_dur_ms schema must not advertise string variant: {s}",
-        );
+        let props = schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("input schema must have a `properties` object");
+        // Each numeric field must advertise its simple type — never a union
+        // with "string", never an `anyOf`. The lenient deserializer accepts
+        // strings server-side; the schema is for advertising strict types
+        // to well-behaved LLMs.
+        let strict_pairs: &[(&str, &str)] = &[
+            ("pid", "integer"),
+            ("upid", "integer"),
+            ("min_dur_ms", "number"),
+            ("limit", "integer"),
+        ];
+        for (field, expected_type) in strict_pairs {
+            let prop = props
+                .get(*field)
+                .unwrap_or_else(|| panic!("`{field}` field missing from schema"));
+            // The field is `Option<T>`, so the schema is either
+            // `{"type": ["<expected_type>", "null"], ...}` (with null
+            // explicit) or carries the type via a single string. Both shapes
+            // must NOT include "string", and must NOT use anyOf.
+            assert!(
+                prop.get("anyOf").is_none(),
+                "`{field}` schema must not use anyOf: {prop}",
+            );
+            let ty = prop
+                .get("type")
+                .unwrap_or_else(|| panic!("`{field}` schema missing `type`: {prop}"));
+            let advertises_string = match ty {
+                serde_json::Value::String(s) => s == "string",
+                serde_json::Value::Array(arr) => arr.iter().any(|v| v.as_str() == Some("string")),
+                _ => false,
+            };
+            assert!(
+                !advertises_string,
+                "`{field}` schema must not advertise string variant: {prop}",
+            );
+            // Sanity-check that the strict type IS present (not just
+            // missing string).
+            let advertises_expected = match ty {
+                serde_json::Value::String(s) => s == *expected_type,
+                serde_json::Value::Array(arr) => {
+                    arr.iter().any(|v| v.as_str() == Some(*expected_type))
+                }
+                _ => false,
+            };
+            assert!(
+                advertises_expected,
+                "`{field}` schema must advertise `{expected_type}`: {prop}",
+            );
+        }
     }
 
     // -- v0.11.3 `name` alias on table_name ------------------------------
@@ -2086,8 +2124,11 @@ mod tests {
     /// LLMs reading `tools/list` see a closed schema and (in theory) are less
     /// prone to hallucinate fields. The 9 advertised tools all carry params
     /// with `deny_unknown_fields` (`ListStdlibModulesParams` is empty but
-    /// still closed). If anyone drops the attribute, this test fails on the
-    /// affected tool's schema.
+    /// still closed — that closure is the whole reason the empty type
+    /// exists; rmcp's parameterless `async fn foo(&self)` shape, by contrast,
+    /// emits an *open* schema and silently ignores hallucinated fields).
+    /// If anyone drops the attribute, this test fails on the affected
+    /// tool's schema.
     #[test]
     fn tool_input_schemas_advertise_closed_object() {
         let server = test_server();
