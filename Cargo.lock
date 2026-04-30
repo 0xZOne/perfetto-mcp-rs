@@ -1040,6 +1040,7 @@ dependencies = [
  "prost-build",
  "reqwest",
  "rmcp",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
