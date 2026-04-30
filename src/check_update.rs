@@ -283,4 +283,53 @@ mod tests {
         let (_, _, code) = render(Err(CheckError::Network(String::new())));
         assert_eq!(code, 1);
     }
+
+    const FIXTURE: &str = include_str!("../tests/fixtures/github_release_response.json");
+
+    #[test]
+    fn parse_release_accepts_real_github_payload() {
+        let release = parse_release(FIXTURE).expect("fixture must parse");
+        assert!(release.tag_name.starts_with('v'), "got: {}", release.tag_name);
+        assert!(!release.published_at.is_empty());
+    }
+
+    #[test]
+    fn parse_release_rejects_missing_tag_name() {
+        let body = r#"{"published_at":"2026-04-30T00:00:00Z"}"#;
+        let err = parse_release(body).expect_err("missing tag_name must error");
+        match err {
+            CheckError::JsonParse(msg) => assert!(
+                msg.contains("tag_name"),
+                "JSON parse error must name missing field, got: {msg}",
+            ),
+            other => panic!("expected JsonParse, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_release_rejects_garbage() {
+        let err = parse_release("not json").expect_err("garbage must error");
+        assert!(matches!(err, CheckError::JsonParse(_)));
+    }
+
+    #[test]
+    fn parse_release_tag_strips_v_prefix() {
+        let v = parse_release_tag("v0.12.0").expect("v-prefix must strip");
+        assert_eq!(v, Version::parse("0.12.0").unwrap());
+    }
+
+    #[test]
+    fn parse_release_tag_accepts_no_prefix() {
+        let v = parse_release_tag("0.12.0").expect("plain semver must parse");
+        assert_eq!(v, Version::parse("0.12.0").unwrap());
+    }
+
+    #[test]
+    fn parse_release_tag_rejects_garbage() {
+        let err = parse_release_tag("not-a-version").expect_err("non-semver must error");
+        match err {
+            CheckError::SemverParse { tag, .. } => assert_eq!(tag, "not-a-version"),
+            other => panic!("expected SemverParse, got: {other:?}"),
+        }
+    }
 }
