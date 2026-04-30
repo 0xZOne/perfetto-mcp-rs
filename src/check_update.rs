@@ -54,10 +54,7 @@ pub enum CheckError {
     #[error("GitHub release JSON parse failed: {0}")]
     JsonParse(String),
     #[error("could not parse semver from tag {tag:?}: {source}")]
-    SemverParse {
-        tag: String,
-        source: semver::Error,
-    },
+    SemverParse { tag: String, source: semver::Error },
     #[error("could not parse local CARGO_PKG_VERSION {version:?}: {source}")]
     LocalSemverParse {
         version: String,
@@ -180,7 +177,12 @@ mod tests {
     #[test]
     fn compare_equal_versions_is_up_to_date() {
         let outcome = compare(v("0.12.0"), v("0.12.0"), "2026-04-30T00:00:00Z".to_owned());
-        assert_eq!(outcome, Outcome::UpToDate { current: v("0.12.0") });
+        assert_eq!(
+            outcome,
+            Outcome::UpToDate {
+                current: v("0.12.0")
+            }
+        );
     }
 
     #[test]
@@ -197,11 +199,7 @@ mod tests {
 
     #[test]
     fn compare_current_less_is_behind_with_published_at() {
-        let outcome = compare(
-            v("0.11.3"),
-            v("0.12.0"),
-            "2026-04-30T12:34:56Z".to_owned(),
-        );
+        let outcome = compare(v("0.11.3"), v("0.12.0"), "2026-04-30T12:34:56Z".to_owned());
         assert_eq!(
             outcome,
             Outcome::Behind {
@@ -214,7 +212,9 @@ mod tests {
 
     #[test]
     fn render_up_to_date_prints_to_stdout_exits_zero() {
-        let (stdout, stderr, code) = render(Ok(Outcome::UpToDate { current: v("0.12.0") }));
+        let (stdout, stderr, code) = render(Ok(Outcome::UpToDate {
+            current: v("0.12.0"),
+        }));
         assert_eq!(stdout, Some("You're on v0.12.0 (latest).".to_owned()));
         assert_eq!(stderr, None);
         assert_eq!(code, 0);
@@ -267,7 +267,9 @@ mod tests {
     /// matching the §3.3 contract.
     #[test]
     fn render_exit_codes_pin_contract() {
-        let (_, _, code) = render(Ok(Outcome::UpToDate { current: v("1.0.0") }));
+        let (_, _, code) = render(Ok(Outcome::UpToDate {
+            current: v("1.0.0"),
+        }));
         assert_eq!(code, 0);
         let (_, _, code) = render(Ok(Outcome::Ahead {
             current: v("1.0.1"),
@@ -289,7 +291,11 @@ mod tests {
     #[test]
     fn parse_release_accepts_real_github_payload() {
         let release = parse_release(FIXTURE).expect("fixture must parse");
-        assert!(release.tag_name.starts_with('v'), "got: {}", release.tag_name);
+        assert!(
+            release.tag_name.starts_with('v'),
+            "got: {}",
+            release.tag_name
+        );
         assert!(!release.published_at.is_empty());
     }
 
