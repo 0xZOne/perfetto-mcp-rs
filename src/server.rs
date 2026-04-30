@@ -584,7 +584,8 @@ impl PerfettoMcpServer {
                        pass an explicit GLOB pattern to bypass the filter. If a table \
                        you expect based on public samples or documentation is not \
                        appearing, tell the user so they can retry with an explicit \
-                       pattern."
+                       pattern. This is a separate MCP tool — do NOT reference it \
+                       inside `execute_sql`; call it directly via the tool API."
     )]
     async fn list_tables(
         &self,
@@ -638,7 +639,9 @@ impl PerfettoMcpServer {
         name = "list_table_structure",
         description = "Show the column names, types, and nullability for a specific \
                        table or view. Use this to understand the schema before writing \
-                       SQL queries."
+                       SQL queries. This is a separate MCP tool — do NOT reference it \
+                       inside `execute_sql` (e.g. `SELECT * FROM list_table_structure`); \
+                       call it directly via the tool API with `table_name`."
     )]
     async fn list_table_structure(
         &self,
@@ -1669,6 +1672,36 @@ mod tests {
             !desc.contains("{columns:"),
             "execute_sql description must not spell out the columnar shape, got: {desc}",
         );
+    }
+
+    /// Pin the schema-discovery tool descriptions' "do NOT use in execute_sql"
+    /// disclaimer. Motivated by a v0.11.2 session log showing the LLM querying
+    /// `SELECT * FROM list_table_structure WHERE 0` (a wasted execute_sql call
+    /// that errored, after which the LLM correctly invoked the tool directly).
+    /// Both `list_tables` and `list_table_structure` carry the same nudge so
+    /// the LLM sees it on whichever schema-discovery surface it reaches first.
+    #[test]
+    fn schema_discovery_tools_warn_against_execute_sql_misuse() {
+        let server = test_server();
+        for tool_name in ["list_tables", "list_table_structure"] {
+            let tool = server
+                .tool_router
+                .list_all()
+                .into_iter()
+                .find(|t| t.name == tool_name)
+                .unwrap_or_else(|| panic!("{tool_name} tool must exist"));
+            let desc = tool.description.as_deref().unwrap_or("");
+            assert!(
+                desc.contains("execute_sql"),
+                "{tool_name} description must explicitly mention execute_sql to \
+                 anchor the disclaimer, got: {desc}",
+            );
+            assert!(
+                desc.contains("separate MCP tool"),
+                "{tool_name} description must say it is a separate MCP tool to \
+                 prevent the LLM from treating it as a virtual table, got: {desc}",
+            );
+        }
     }
 
     /// v0.10.0 reverted `Json<T>` returns to plain `Result<String, String>`
