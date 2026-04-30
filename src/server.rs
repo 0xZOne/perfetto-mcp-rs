@@ -576,12 +576,19 @@ pub const STDLIB_MODULE_LIST: &str = r#"[
 impl PerfettoMcpServer {
     #[tool(
         name = "load_trace",
-        description = "Load a Perfetto trace file for analysis. This is the only tool that \
-                       takes a `path` — every subsequent tool operates on the current trace \
-                       set here. The `path` must be an absolute path to a .perfetto-trace \
-                       or .pftrace file. To analyze a different trace, call `load_trace` \
-                       again with the new path (cached `trace_processor_shell` instances \
-                       make repeat loads near-zero-cost)."
+        description = "Load a Perfetto trace file for analysis. Every other tool operates on \
+                       the trace set here.\n\
+                       \n\
+                       Use when: starting any analysis session — call this first.\n\
+                       \n\
+                       Don't use for: live trace capture (Perfetto records traces; \
+                       perfetto-mcp-rs only reads the resulting file) or for streaming \
+                       URLs (path must be a complete file on local disk).\n\
+                       \n\
+                       Parameters: `path` is an absolute path to a `.perfetto-trace` or \
+                       `.pftrace` file. Calling again with a new path replaces the active \
+                       trace; cached `trace_processor_shell` instances make repeat loads \
+                       near-zero-cost."
     )]
     async fn load_trace(
         &self,
@@ -611,32 +618,35 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "execute_sql",
-        description = "Execute a PerfettoSQL query against the current loaded trace. Results \
-                       are capped at 5000 rows and aggregates are strongly preferred over \
-                       raw row data. Requires `load_trace` to have been called first.\n\
+        description = "Run a PerfettoSQL query against the loaded trace and return rows as \
+                       columnar JSON. Aggregates are strongly preferred over raw row data; \
+                       results are capped at 5000 rows.\n\
                        \n\
-                       Call `list_stdlib_modules` (no trace needed) to see curated modules \
-                       with usage examples. The dedicated chrome_* tools cover the most \
-                       common Chrome analyses directly.\n\
+                       Use when: composing analyses not covered by the dedicated tools — \
+                       custom aggregations, joins across stdlib modules, or queries against \
+                       base tables (`slice`, `thread`, `process`, `sched`).\n\
                        \n\
-                       The PerfettoSQL stdlib is documented at \
-                       https://perfetto.dev/docs/analysis/stdlib-docs — auto-generated \
-                       from the stdlib SQL sources across 24 packages (chrome, android, \
-                       sched, slices, linux, wattson, v8, ...), worth fetching fully \
-                       (or per-package via anchors like #package-chrome, \
-                       #package-android) to learn exact view columns and function \
-                       signatures before composing queries. Stdlib modules already \
-                       encode the correct JOIN shape for most common analyses, so \
-                       reach for them before hand-rolling scans on `slice`.\n\
+                       Don't use for: questions the dedicated `chrome_*` tools answer — \
+                       they return the same data with the JOIN shape already correct. \
+                       Don't hand-roll `slice` scans with `LIKE '%x%'` patterns when a \
+                       stdlib module covers the data; `INCLUDE PERFETTO MODULE chrome.tasks` \
+                       is faster and the joins are pre-baked.\n\
                        \n\
-                       PerfettoSQL syntax: https://perfetto.dev/docs/analysis/perfetto-sql-syntax\n\
+                       Parameters: `sql` is a single PerfettoSQL statement (the `INCLUDE \
+                       PERFETTO MODULE foo;` and `SELECT ...` can be in the same call). \
+                       Requires `load_trace` to have run first.\n\
                        \n\
-                       Subtopic references:\n\
-                       - Jank and frame timing: https://perfetto.dev/docs/data-sources/frametimeline\n\
-                       - CPU scheduling: https://perfetto.dev/docs/data-sources/cpu-scheduling\n\
-                       - Memory counters: https://perfetto.dev/docs/data-sources/memory-counters\n\
-                       - Battery counters: https://perfetto.dev/docs/data-sources/battery-counters\n\
-                       - Android logs: https://perfetto.dev/docs/data-sources/android-log"
+                       Empty `rows` means the query matched nothing — distinct from a SQL \
+                       error, which is returned as an error string with a hint pointing \
+                       at the most likely cause (missing module, missing column, missing \
+                       table).\n\
+                       \n\
+                       Reference docs (fetch when you need exact column names or function \
+                       signatures): \
+                       https://perfetto.dev/docs/analysis/stdlib-docs (24 stdlib packages — \
+                       chrome / android / sched / slices / linux / wattson / v8 / ...; use \
+                       per-package anchors like `#package-chrome`), \
+                       https://perfetto.dev/docs/analysis/perfetto-sql-syntax (syntax)."
     )]
     async fn execute_sql(
         &self,
@@ -652,14 +662,24 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "list_tables",
-        description = "List all tables and views available in the loaded trace. Optionally \
-                       filter by a GLOB pattern (e.g. 'chrome_*', 'slice*'). Internal \
-                       stdlib tables (names starting with `_`) are hidden by default; \
-                       pass an explicit GLOB pattern to bypass the filter. If a table \
-                       you expect based on public samples or documentation is not \
-                       appearing, tell the user so they can retry with an explicit \
-                       pattern. This is a separate MCP tool — do NOT reference it \
-                       inside `execute_sql`; call it directly via the tool API."
+        description = "Discover what tables and views the current trace exposes.\n\
+                       \n\
+                       Use when: exploring an unfamiliar trace, or verifying a table \
+                       exists before writing a query against it.\n\
+                       \n\
+                       Don't use for: cases where you already know which stdlib module \
+                       to INCLUDE — go straight to `execute_sql`. Don't reference this \
+                       tool name inside SQL; it's a separate MCP tool, not a SQL \
+                       function — call it via the tool API.\n\
+                       \n\
+                       Parameters: optional `pattern` is a GLOB filter (e.g. `chrome_*`, \
+                       `slice*`). Internal stdlib tables (names starting with `_`) are \
+                       hidden when no pattern is set; pass an explicit pattern to bypass \
+                       the filter.\n\
+                       \n\
+                       Empty result: no tables matched. If a table from public docs is \
+                       missing, retry with an explicit pattern in case it's marked \
+                       internal."
     )]
     async fn list_tables(
         &self,
@@ -711,11 +731,23 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "list_table_structure",
-        description = "Show the column names, types, and nullability for a specific \
-                       table or view. Use this to understand the schema before writing \
-                       SQL queries. This is a separate MCP tool — do NOT reference it \
-                       inside `execute_sql` (e.g. `SELECT * FROM list_table_structure`); \
-                       call it directly via the tool API with `table_name`."
+        description = "Show the columns of a table or view: name, type, nullability, \
+                       primary-key flag.\n\
+                       \n\
+                       Use when: writing or debugging a query — call this immediately \
+                       after a `no such column` error to inspect the actual schema \
+                       rather than guessing. Both stdlib views and base tables have \
+                       fixed schemas; don't infer columns by analogy across them.\n\
+                       \n\
+                       Don't use for: this is a separate MCP tool, not a SQL function — \
+                       don't write `SELECT * FROM list_table_structure` inside \
+                       `execute_sql`.\n\
+                       \n\
+                       Parameters: `table_name` is the exact table or view name \
+                       (case-sensitive).\n\
+                       \n\
+                       Errors when: the table doesn't exist or has no columns. Call \
+                       `list_tables` first if uncertain about the name."
     )]
     async fn list_table_structure(
         &self,
@@ -747,10 +779,20 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "list_processes",
-        description = "List all processes in the loaded trace with upid, pid, name, \
-                       start_ts, and end_ts. A good starting point for Android and \
-                       Linux trace analysis — pick a process by name, then call \
-                       list_threads_in_process to drill down."
+        description = "List every process captured in the trace: upid (trace-internal \
+                       id), pid (OS pid), name, start_ts, end_ts.\n\
+                       \n\
+                       Use when: entry point for Android and Linux trace analysis, or \
+                       picking the right `pid`/`upid` to feed into `list_threads_in_process` \
+                       or `chrome_main_thread_hotspots`.\n\
+                       \n\
+                       Don't use for: Chrome traces — the dedicated `chrome_*` tools \
+                       answer most common questions without process-level navigation.\n\
+                       \n\
+                       Parameters: none.\n\
+                       \n\
+                       Empty result: rare; would mean the trace captured no process \
+                       metadata at all."
     )]
     async fn list_processes(
         &self,
@@ -766,13 +808,26 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "list_threads_in_process",
-        description = "List up to 2000 threads belonging to a process, returning tid, \
-                       thread_name, pid, and upid for each. Identify the process by \
-                       either `upid` (trace-internal id from list_processes — \
-                       disambiguates between multiple processes sharing a name, e.g. \
-                       multiple Renderer instances) OR `process_name` (exact match). \
-                       `upid` wins when both are set. If the 2000-row cap is hit, drill \
-                       down via execute_sql."
+        description = "List threads inside one process: tid, thread_name, pid, upid. \
+                       Limit 2000 rows.\n\
+                       \n\
+                       Use when: drilling into a specific process picked from \
+                       `list_processes` — e.g. finding a renderer's compositor thread, \
+                       or auditing all threads under system_server.\n\
+                       \n\
+                       Don't use for: enumerating ALL threads across the whole trace — \
+                       use `execute_sql` against the `thread` table for that.\n\
+                       \n\
+                       Parameters: pass either `upid` (trace-internal id, precise — \
+                       prefer when multiple processes share a name like 'Renderer') or \
+                       `process_name` (exact match). `upid` wins when both are set.\n\
+                       \n\
+                       Empty result: returned as an error pointing at `list_processes` \
+                       for available candidates.\n\
+                       \n\
+                       When the 2000-row cap is hit (system_server, Chrome \
+                       renderer-fork): drill down via `execute_sql` against the `thread` \
+                       table directly."
     )]
     async fn list_threads_in_process(
         &self,
@@ -828,11 +883,21 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "chrome_scroll_jank_summary",
-        description = "Return the worst scroll jank frames in a Chrome trace — one row per \
-                       janky frame, sorted by delay_since_last_frame DESC (limit 100). \
-                       Columns: cause_of_jank, sub_cause_of_jank, delay_since_last_frame, \
-                       event_latency_id, scroll_id, vsync_interval. Uses \
-                       chrome.scroll_jank.scroll_jank_v3. Chrome traces only."
+        description = "Summarize the worst scroll jank frames in a Chrome trace: \
+                       cause_of_jank, sub_cause_of_jank, delay_since_last_frame, \
+                       event_latency_id, scroll_id, vsync_interval. One row per janky \
+                       frame, sorted by delay_since_last_frame DESC, limit 100.\n\
+                       \n\
+                       Use when: investigating jank reports, finding scroll regressions, \
+                       ranking jank causes. Prefer over hand-rolling SQL on \
+                       `chrome.scroll_jank.scroll_jank_v3` — same data, less code.\n\
+                       \n\
+                       Don't use for: non-Chrome traces (will error). For per-frame \
+                       causes outside the top 100, drop to `execute_sql` against the \
+                       same view.\n\
+                       \n\
+                       Empty result: no janky frames detected (clean trace) or no \
+                       scrolls occurred during capture."
     )]
     async fn chrome_scroll_jank_summary(
         &self,
@@ -849,9 +914,19 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "chrome_page_load_summary",
-        description = "Summarize page loads in a Chrome trace: navigation id, URL, FCP / \
-                       LCP / DCL / load times in ms, one row per navigation. Uses the \
-                       stdlib `chrome.page_loads` module. Chrome traces only."
+        description = "Summarize each page navigation in a Chrome trace: navigation id, \
+                       URL, FCP / LCP / DCL / load timings in ms.\n\
+                       \n\
+                       Use when: comparing page-load timings across navigations, finding \
+                       slow loads, baselining web-vitals before/after a change. Prefer \
+                       over hand-joining `chrome.page_loads` — schema is already correct.\n\
+                       \n\
+                       Don't use for: non-Chrome traces (will error). For sub-event \
+                       timings inside one navigation, drop to `execute_sql` against the \
+                       `chrome.page_loads` module.\n\
+                       \n\
+                       Empty result: no navigations occurred during capture (e.g. trace \
+                       started after the page was already loaded)."
     )]
     async fn chrome_page_load_summary(
         &self,
@@ -868,33 +943,40 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "chrome_main_thread_hotspots",
-        description = "Top Chrome main-thread tasks by wall duration. Uses \
-                       thread.is_main_thread = 1 (tid == pid per Linux convention) \
-                       to identify main threads. Columns: id, name, task_type, \
-                       thread_name, process_name, dur_ms, cpu_pct (thread_dur/dur), \
-                       thread_dur_ms. Uses chrome.tasks. Chrome traces only.\n\
+        description = "Top Chrome main-thread tasks by wall duration: id, name, \
+                       task_type, thread_name, process_name, dur_ms, cpu_pct \
+                       (thread_dur/dur), thread_dur_ms. Uses `chrome.tasks` and \
+                       `thread.is_main_thread = 1` (tid == pid per Linux convention).\n\
                        \n\
-                       Optional knobs:\n\
+                       Use when: investigating main-thread responsiveness, finding hot \
+                       tasks during scroll/load, comparing CPU vs wall time, scoping \
+                       to one renderer in multi-renderer traces.\n\
+                       \n\
+                       Don't use for: non-Chrome traces (will error). For background \
+                       (non-main) thread tasks, drop to `execute_sql` against \
+                       `chrome.tasks` directly.\n\
+                       \n\
+                       Parameters (all optional):\n\
                        - `process_name` / `pid` / `upid`: scope to one process or \
                          process type. `process_name='Renderer'` shows all renderers \
                          together; `pid` is the OS pid (visible in Task Manager but \
                          can be recycled mid-trace); `upid` is the trace-internal \
                          unique pid (always precise — prefer over `pid` for \
-                         multi-renderer traces). Look up both via list_processes. \
-                         All AND when set; redundant pairings (e.g. matching upid + \
-                         pid) are harmless.\n\
-                       - `min_dur_ms`: minimum task duration in ms. Defaults to 16 \
-                         (one 60 Hz frame). Pass 0 for ALL tasks; raise to 33 (30 Hz) \
-                         or 100 to focus on bigger stutters.\n\
-                       - `limit`: max rows (omit for default 100; capped at 5000). \
-                         Must be > 0 if set.\n\
+                         multi-renderer traces). Look up both via `list_processes`. \
+                         All AND when set; redundant pairings (e.g. matching \
+                         upid + pid) are harmless.\n\
+                       - `min_dur_ms`: minimum task duration. Defaults to 16 (one \
+                         60 Hz frame). Pass 0 for ALL tasks; raise to 33 (30 Hz) or \
+                         100 to focus on bigger stutters.\n\
+                       - `limit`: max rows (default 100, capped at 5000). Must be > 0 \
+                         if set.\n\
                        \n\
-                       Empty `rows` means either no main-thread tasks exceeded \
-                       `min_dur_ms` (good performance at that threshold), or thread \
-                       metadata is incomplete (is_main_thread is NULL). If the latter \
-                       is suspected, retry with execute_sql filtering on thread_name \
-                       IN ('CrBrowserMain', 'CrRendererMain') to bypass the \
-                       is_main_thread filter."
+                       Empty result: either no main-thread tasks exceeded `min_dur_ms` \
+                       (good performance at that threshold), or thread metadata is \
+                       incomplete (`is_main_thread` is NULL). If the latter is \
+                       suspected, retry with `execute_sql` filtering on `thread_name \
+                       IN ('CrBrowserMain', 'CrRendererMain')` to bypass the \
+                       `is_main_thread` filter."
     )]
     async fn chrome_main_thread_hotspots(
         &self,
@@ -920,9 +1002,20 @@ impl PerfettoMcpServer {
     #[tool(
         name = "chrome_startup_summary",
         description = "Summarize Chrome browser startup events: id, name, launch_cause, \
-                       startup_duration_ms (first_visible_content_ts - startup_begin_ts), \
-                       browser_upid. Uses chrome.startups. Chrome traces only. Empty \
-                       `rows` if no startup data was captured."
+                       startup_duration_ms (first_visible_content_ts - \
+                       startup_begin_ts), browser_upid.\n\
+                       \n\
+                       Use when: measuring time-to-first-visible-content for cold \
+                       starts, comparing launch causes (NEW_WINDOW vs CMD_LINE vs \
+                       RESTORE_SESSION), regressing startup performance.\n\
+                       \n\
+                       Don't use for: non-Chrome traces (will error). Browser-process \
+                       work during steady state is covered by \
+                       `chrome_main_thread_hotspots`.\n\
+                       \n\
+                       Empty result: trace started after the browser was already \
+                       running (most cases — startup is captured only when tracing \
+                       began before launch)."
     )]
     async fn chrome_startup_summary(
         &self,
@@ -939,11 +1032,20 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "chrome_web_content_interactions",
-        description = "Return web content interactions (clicks, taps, keyboard input, \
-                       drags) in a Chrome trace, sorted by duration DESC (limit 100). \
-                       Columns: id, ts, dur_ms, interaction_type, renderer_upid. Useful \
-                       for INP (Interaction to Next Paint) analysis. Uses \
-                       chrome.web_content_interactions. Chrome traces only."
+        description = "Rank web content interactions in a Chrome trace by duration: id, \
+                       ts, dur_ms, interaction_type, renderer_upid. Sorted by dur_ms \
+                       DESC, limit 100.\n\
+                       \n\
+                       Use when: INP (Interaction to Next Paint) analysis, reproducing \
+                       user-felt latency, finding slow click/tap/keyboard handlers.\n\
+                       \n\
+                       Don't use for: non-Chrome traces (will error). For interactions \
+                       outside the top 100 or filtered by `interaction_type`, drop to \
+                       `execute_sql` against `chrome.web_content_interactions`.\n\
+                       \n\
+                       Empty result: no interactions captured (trace started before \
+                       user input or interaction tracking was disabled in tracing \
+                       config)."
     )]
     async fn chrome_web_content_interactions(
         &self,
@@ -960,21 +1062,28 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "list_stdlib_modules",
-        description = "List a curated set of PerfettoSQL stdlib modules for the default \
-                       trace_processor_shell version. Returns a JSON array — each entry \
-                       has `module` (for INCLUDE PERFETTO MODULE), `domain` \
-                       (chrome / android / generic), `views`, `description`, and an \
-                       illustrative `usage` query (verify column names with \
-                       list_table_structure if needed).\n\
+        description = "List a curated set of PerfettoSQL stdlib modules. Returns a JSON \
+                       array — each entry has `module` (the value for `INCLUDE PERFETTO \
+                       MODULE`), `domain` (chrome / android / generic), `views`, \
+                       `description`, and an illustrative `usage` query.\n\
                        \n\
-                       Takes no parameters — call this before loading a trace to \
-                       discover which modules cover analyses not handled by the \
-                       dedicated chrome_* tools. Then use execute_sql with \
-                       `INCLUDE PERFETTO MODULE <module>` — INCLUDE and SELECT can be \
-                       in a single call.\n\
+                       Use when: exploring what's available before writing SQL against \
+                       an unfamiliar trace type, or discovering modules outside the \
+                       dedicated `chrome_*` tools (memory, sched, wattson, v8, etc.). \
+                       Call this before `load_trace` if you want to scope your analysis \
+                       upfront — no trace needs to be loaded.\n\
                        \n\
-                       If PERFETTO_TP_PATH points to a custom binary, some modules may \
-                       not be available in that version."
+                       Don't use for: discovering all stdlib modules — this is a \
+                       curated subset of the most useful ones. The exhaustive list \
+                       lives at https://perfetto.dev/docs/analysis/stdlib-docs.\n\
+                       \n\
+                       Parameters: none.\n\
+                       \n\
+                       Then use `execute_sql` with `INCLUDE PERFETTO MODULE <module>; \
+                       SELECT ...` (both can be in one call). If `PERFETTO_TP_PATH` \
+                       points to a custom binary, some modules may not exist in that \
+                       version — verify column names with `list_table_structure` if a \
+                       query fails."
     )]
     async fn list_stdlib_modules(
         &self,
