@@ -28,7 +28,23 @@ Codex、Claude Desktop、Cursor 等）。这类客户端会沿着错误消息的
 
 ## 快速安装
 
-**Linux / macOS / Windows（Git Bash、MSYS2、Cygwin）：**
+**macOS / Linux (Homebrew，推荐)：**
+
+```sh
+brew tap 0xZOne/tap
+brew install perfetto-mcp-rs
+# brew 会打印一段 caveats；按提示跑下面这条把自己注册到 Claude Code / Codex：
+perfetto-mcp-rs install --binary-path "$(brew --prefix)/bin/perfetto-mcp-rs"
+```
+
+**Rust 开发者（`cargo install`）：**
+
+```sh
+cargo install --locked perfetto-mcp-rs
+perfetto-mcp-rs install --binary-path "$(which perfetto-mcp-rs)"
+```
+
+**Linux / macOS / Windows（Git Bash、MSYS2、Cygwin）—— 直接脚本：**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh
@@ -96,6 +112,14 @@ $env:VERSION = 'v0.7.0'; irm https://raw.githubusercontent.com/0xZOne/perfetto-m
 ```
 
 无后台自动更新——升级由用户显式触发。
+
+## 检查更新
+
+```sh
+perfetto-mcp-rs check-update
+```
+
+如果当前已是最新（或本地为开发版）退出码 0；有新版本退出码 2；网络/解析错误退出码 1。适合 shell 提示符集成或 CI 预检。
 
 ## 卸载
 

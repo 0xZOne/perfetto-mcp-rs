@@ -28,7 +28,23 @@ LLM through the typical `load_trace` → `list_tables` → `list_table_structure
 
 ## Quick install
 
-**Linux / macOS / Windows (Git Bash, MSYS2, Cygwin):**
+**macOS / Linux (Homebrew, recommended):**
+
+```sh
+brew tap 0xZOne/tap
+brew install perfetto-mcp-rs
+# brew prints caveats; run the printed line to register with Claude Code / Codex:
+perfetto-mcp-rs install --binary-path "$(brew --prefix)/bin/perfetto-mcp-rs"
+```
+
+**Rust developers (`cargo install`):**
+
+```sh
+cargo install --locked perfetto-mcp-rs
+perfetto-mcp-rs install --binary-path "$(which perfetto-mcp-rs)"
+```
+
+**Linux / macOS / Windows (Git Bash, MSYS2, Cygwin) — direct script:**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/0xZOne/perfetto-mcp-rs/main/install.sh | sh
@@ -100,6 +116,14 @@ $env:VERSION = 'v0.7.0'; irm https://raw.githubusercontent.com/0xZOne/perfetto-m
 ```
 
 No auto-update daemon — upgrades are explicit.
+
+## Check for updates
+
+```sh
+perfetto-mcp-rs check-update
+```
+
+Exits 0 if up to date (or ahead of releases — local dev build), 2 if a newer release exists, 1 on network or parse error. Useful for shell-prompt integrations and CI pre-checks.
 
 ## Uninstall
 
