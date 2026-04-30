@@ -70,7 +70,7 @@ detect_platform() {
   arch="$(uname -m)"
   case "$os" in
     linux)                 os_tag="linux" ;;
-    darwin)                os_tag="mac" ;;
+    darwin)                os_tag="darwin" ;;
     msys*|mingw*|cygwin*)  os_tag="windows" ;;
     *) err "unsupported OS: $os" ;;
   esac

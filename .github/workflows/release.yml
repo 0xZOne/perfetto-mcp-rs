@@ -33,10 +33,10 @@ jobs:
             asset_name: perfetto-mcp-rs-linux-arm64
           - target: x86_64-apple-darwin
             os: macos-14
-            asset_name: perfetto-mcp-rs-mac-amd64
+            asset_name: perfetto-mcp-rs-darwin-amd64
           - target: aarch64-apple-darwin
             os: macos-14
-            asset_name: perfetto-mcp-rs-mac-arm64
+            asset_name: perfetto-mcp-rs-darwin-arm64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             asset_name: perfetto-mcp-rs-windows-amd64.exe
