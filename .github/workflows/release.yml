@@ -122,10 +122,24 @@ jobs:
     needs: build
     runs-on: macos-14
     steps:
+      # Mint a short-lived installation token via the GitHub App that owns
+      # write access to tooluse-labs/homebrew-tap. Replaces the long-lived
+      # HOMEBREW_TAP_TOKEN PAT (capped at 366 days for fine-grained tokens) —
+      # App-installation tokens auto-rotate per workflow run and the App
+      # credentials themselves never expire. Same pattern as the publish-crate
+      # job's crates.io Trusted Publishing.
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.HOMEBREW_TAP_APP_ID }}
+          private-key: ${{ secrets.HOMEBREW_TAP_APP_KEY }}
+          owner: tooluse-labs
+          repositories: homebrew-tap
+
       - uses: actions/checkout@v6
         with:
           repository: tooluse-labs/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           path: tap
 
       - name: Resolve tag and version
