@@ -141,11 +141,19 @@ pub struct ChromeMainThreadHotspotsParams {
     /// Useful to scope to one process type without picking a specific instance.
     #[serde(default)]
     pub process_name: Option<String>,
-    /// Optional pid filter — disambiguates between multiple processes sharing a
-    /// name (e.g. several Renderer instances). Get pid from `list_processes`.
-    /// ANDed with `process_name` when both are set.
+    /// Optional pid filter — the OS-level process ID (visible in Task Manager).
+    /// Get pid from `list_processes`. ANDs with the other filters when set.
+    /// Note: pids can be recycled within a long trace; prefer `upid` when
+    /// precision matters.
     #[serde(default)]
     pub pid: Option<i64>,
+    /// Optional upid filter — the trace-internal Unique Process ID assigned by
+    /// trace_processor (also from `list_processes`). Always uniquely identifies
+    /// one process within a trace, even if the OS recycled its pid. Use this
+    /// to disambiguate same-named or pid-recycled processes; ANDs with the
+    /// other filters when set.
+    #[serde(default)]
+    pub upid: Option<i64>,
     /// Optional minimum task duration in milliseconds. Defaults to 16 ms (one
     /// 60 Hz frame budget). Pass 0 to see ALL main-thread tasks; raise to e.g.
     /// 33 (30 Hz) or 100 to focus on the worst stutters. Must be a finite
@@ -276,20 +284,25 @@ pub const CHROME_PAGE_LOAD_SUMMARY_SQL: &str = "INCLUDE PERFETTO MODULE chrome.p
 ///
 /// Optional filters:
 /// - `process_name` adds `AND ct.process_name = '<name>'`
-/// - `pid` adds `AND p.pid = <pid>`
+/// - `pid` adds `AND p.pid = <pid>` (OS pid; can be recycled mid-trace)
+/// - `upid` adds `AND p.upid = <upid>` (trace-internal unique pid; always
+///   precise even when the OS recycles a pid)
 /// - `min_dur_ms` overrides the default 16 ms threshold (must be a finite
 ///   non-negative number; 0 returns all main-thread tasks)
 /// - `limit` overrides the default LIMIT 100 (capped at MAX_ROWS = 5000;
 ///   must be > 0)
 ///
-/// Both filter clauses AND together when set. The base SQL also picks up a
-/// `JOIN process p ON ct.upid = p.upid` so `p.pid` is referenceable; the
-/// join is harmless when no pid filter is present. Defaults preserve the
-/// pre-knob behavior so a `(None, None, None, None)` call is byte-equivalent
-/// to the legacy hardcoded SQL save for the `JOIN process` clause.
+/// All filter clauses AND together when set — the redundancy is harmless
+/// (e.g. `upid=3 AND pid=12800` still hits when the pair refers to one
+/// process). The base SQL picks up a `JOIN process p ON ct.upid = p.upid`
+/// so `p.pid` and `p.upid` are referenceable; the join is harmless when no
+/// process filter is present. Defaults preserve the pre-knob behavior so a
+/// `(None, None, None, None, None)` call is byte-equivalent to the legacy
+/// hardcoded SQL save for the `JOIN process` clause.
 pub fn chrome_main_thread_hotspots_sql(
     process_name: Option<&str>,
     pid: Option<i64>,
+    upid: Option<i64>,
     min_dur_ms: Option<f64>,
     limit: Option<u32>,
 ) -> Result<String, PerfettoError> {
@@ -341,6 +354,9 @@ pub fn chrome_main_thread_hotspots_sql(
     }
     if let Some(pid) = pid {
         sql.push_str(&format!(" AND p.pid = {pid}"));
+    }
+    if let Some(upid) = upid {
+        sql.push_str(&format!(" AND p.upid = {upid}"));
     }
     sql.push_str(&format!(" ORDER BY ct.dur DESC LIMIT {row_limit}"));
     Ok(sql)
@@ -764,10 +780,14 @@ impl PerfettoMcpServer {
                        thread_dur_ms. Uses chrome.tasks. Chrome traces only.\n\
                        \n\
                        Optional knobs:\n\
-                       - `process_name` / `pid`: scope to one process or process \
-                         type. Multi-renderer traces benefit from `pid` (look up via \
-                         list_processes); use `process_name='Renderer'` to see all \
-                         renderers' main threads together. Both AND when set.\n\
+                       - `process_name` / `pid` / `upid`: scope to one process or \
+                         process type. `process_name='Renderer'` shows all renderers \
+                         together; `pid` is the OS pid (visible in Task Manager but \
+                         can be recycled mid-trace); `upid` is the trace-internal \
+                         unique pid (always precise — prefer over `pid` for \
+                         multi-renderer traces). Look up both via list_processes. \
+                         All AND when set; redundant pairings (e.g. matching upid + \
+                         pid) are harmless.\n\
                        - `min_dur_ms`: minimum task duration in ms. Defaults to 16 \
                          (one 60 Hz frame). Pass 0 for ALL tasks; raise to 33 (30 Hz) \
                          or 100 to focus on bigger stutters.\n\
@@ -790,6 +810,7 @@ impl PerfettoMcpServer {
         let sql = chrome_main_thread_hotspots_sql(
             params.process_name.as_deref(),
             params.pid,
+            params.upid,
             params.min_dur_ms,
             params.limit,
         )
@@ -1563,6 +1584,7 @@ mod tests {
                     path: non_chrome_path.to_owned(),
                     process_name: None,
                     pid: None,
+                    upid: None,
                     min_dur_ms: None,
                     limit: None,
                 }))
@@ -1746,8 +1768,8 @@ mod tests {
     /// set — this means handlers can always use the same builder.
     #[test]
     fn chrome_main_thread_hotspots_sql_no_filter_runs_all_main_threads() {
-        let sql =
-            chrome_main_thread_hotspots_sql(None, None, None, None).expect("builder must succeed");
+        let sql = chrome_main_thread_hotspots_sql(None, None, None, None, None)
+            .expect("builder must succeed");
         assert!(sql.contains("WHERE t.is_main_thread = 1"));
         assert!(sql.contains("AND ct.dur > 16000000"));
         assert!(sql.contains("ORDER BY ct.dur DESC LIMIT 100"));
@@ -1759,22 +1781,47 @@ mod tests {
             !sql.contains("p.pid ="),
             "no-filter SQL must not emit pid filter, got: {sql}",
         );
+        assert!(
+            !sql.contains("p.upid ="),
+            "no-filter SQL must not emit upid filter, got: {sql}",
+        );
     }
 
     #[test]
     fn chrome_main_thread_hotspots_sql_with_pid_emits_filter() {
-        let sql = chrome_main_thread_hotspots_sql(None, Some(12800), None, None)
+        let sql = chrome_main_thread_hotspots_sql(None, Some(12800), None, None, None)
             .expect("pid-filter builder must succeed");
         assert!(sql.contains("AND p.pid = 12800"), "got: {sql}");
         assert!(
             !sql.contains("ct.process_name ="),
             "pid-only filter must not emit process_name clause, got: {sql}",
         );
+        assert!(
+            !sql.contains("p.upid ="),
+            "pid-only filter must not emit upid clause, got: {sql}",
+        );
+    }
+
+    /// upid is the trace-internal unique pid — precise even when the OS
+    /// recycles a pid. Adds `AND p.upid = ?` to the WHERE clause.
+    #[test]
+    fn chrome_main_thread_hotspots_sql_with_upid_emits_filter() {
+        let sql = chrome_main_thread_hotspots_sql(None, None, Some(3), None, None)
+            .expect("upid-filter builder must succeed");
+        assert!(sql.contains("AND p.upid = 3"), "got: {sql}");
+        assert!(
+            !sql.contains("p.pid ="),
+            "upid-only filter must not emit pid clause, got: {sql}",
+        );
+        assert!(
+            !sql.contains("ct.process_name ="),
+            "upid-only filter must not emit process_name clause, got: {sql}",
+        );
     }
 
     #[test]
     fn chrome_main_thread_hotspots_sql_with_process_name_emits_filter() {
-        let sql = chrome_main_thread_hotspots_sql(Some("Renderer"), None, None, None)
+        let sql = chrome_main_thread_hotspots_sql(Some("Renderer"), None, None, None, None)
             .expect("name-filter builder must succeed");
         assert!(
             sql.contains("AND ct.process_name = 'Renderer'"),
@@ -1784,7 +1831,7 @@ mod tests {
 
     #[test]
     fn chrome_main_thread_hotspots_sql_with_both_filters_ands_them() {
-        let sql = chrome_main_thread_hotspots_sql(Some("Renderer"), Some(12800), None, None)
+        let sql = chrome_main_thread_hotspots_sql(Some("Renderer"), Some(12800), None, None, None)
             .expect("combined-filter builder must succeed");
         assert!(
             sql.contains("AND ct.process_name = 'Renderer'"),
@@ -1793,12 +1840,23 @@ mod tests {
         assert!(sql.contains("AND p.pid = 12800"), "got: {sql}");
     }
 
+    /// Redundant `upid + pid` pairing is documented as harmless — both clauses
+    /// emit and AND together. Useful when the LLM has both IDs handy from
+    /// list_processes and wants a belt-and-suspenders filter.
+    #[test]
+    fn chrome_main_thread_hotspots_sql_with_upid_and_pid_emits_both() {
+        let sql = chrome_main_thread_hotspots_sql(None, Some(12800), Some(3), None, None)
+            .expect("upid+pid combined builder must succeed");
+        assert!(sql.contains("AND p.pid = 12800"), "got: {sql}");
+        assert!(sql.contains("AND p.upid = 3"), "got: {sql}");
+    }
+
     /// `min_dur_ms = 33.0` translates to `ct.dur > 33000000` ns. Default
     /// (`None`) preserves the legacy 16 ms threshold pinned by the no-filter
     /// test above.
     #[test]
     fn chrome_main_thread_hotspots_sql_with_min_dur_ms_emits_threshold() {
-        let sql = chrome_main_thread_hotspots_sql(None, None, Some(33.0), None)
+        let sql = chrome_main_thread_hotspots_sql(None, None, None, Some(33.0), None)
             .expect("min_dur_ms builder must succeed");
         assert!(
             sql.contains("AND ct.dur > 33000000"),
@@ -1815,14 +1873,14 @@ mod tests {
     /// (which `chrome_tasks` shouldn't have anyway).
     #[test]
     fn chrome_main_thread_hotspots_sql_with_min_dur_ms_zero_emits_zero_threshold() {
-        let sql = chrome_main_thread_hotspots_sql(None, None, Some(0.0), None)
+        let sql = chrome_main_thread_hotspots_sql(None, None, None, Some(0.0), None)
             .expect("zero threshold must be accepted");
         assert!(sql.contains("AND ct.dur > 0"), "got: {sql}");
     }
 
     #[test]
     fn chrome_main_thread_hotspots_sql_rejects_negative_min_dur_ms() {
-        let err = chrome_main_thread_hotspots_sql(None, None, Some(-1.0), None)
+        let err = chrome_main_thread_hotspots_sql(None, None, None, Some(-1.0), None)
             .expect_err("negative min_dur_ms must error");
         assert!(
             err.to_string().contains("min_dur_ms"),
@@ -1832,7 +1890,7 @@ mod tests {
 
     #[test]
     fn chrome_main_thread_hotspots_sql_rejects_nan_min_dur_ms() {
-        let err = chrome_main_thread_hotspots_sql(None, None, Some(f64::NAN), None)
+        let err = chrome_main_thread_hotspots_sql(None, None, None, Some(f64::NAN), None)
             .expect_err("NaN min_dur_ms must error");
         assert!(
             err.to_string().contains("min_dur_ms"),
@@ -1846,7 +1904,7 @@ mod tests {
     /// the overflow guard fires before the cast and surfaces the failure.
     #[test]
     fn chrome_main_thread_hotspots_sql_rejects_min_dur_ms_overflowing_i64_ns() {
-        let err = chrome_main_thread_hotspots_sql(None, None, Some(1e20), None)
+        let err = chrome_main_thread_hotspots_sql(None, None, None, Some(1e20), None)
             .expect_err("min_dur_ms that overflows i64 ns must error");
         assert!(
             err.to_string().contains("min_dur_ms"),
@@ -1860,7 +1918,7 @@ mod tests {
     /// enough not to false-reject any real-world threshold.
     #[test]
     fn chrome_main_thread_hotspots_sql_accepts_min_dur_ms_just_under_i64_ns_overflow() {
-        let sql = chrome_main_thread_hotspots_sql(None, None, Some(9e12), None)
+        let sql = chrome_main_thread_hotspots_sql(None, None, None, Some(9e12), None)
             .expect("near-boundary min_dur_ms must accept");
         assert!(
             sql.contains("AND ct.dur > 9000000000000000000"),
@@ -1870,7 +1928,7 @@ mod tests {
 
     #[test]
     fn chrome_main_thread_hotspots_sql_with_limit_overrides_default() {
-        let sql = chrome_main_thread_hotspots_sql(None, None, None, Some(25))
+        let sql = chrome_main_thread_hotspots_sql(None, None, None, None, Some(25))
             .expect("limit builder must succeed");
         assert!(
             sql.contains("ORDER BY ct.dur DESC LIMIT 25"),
@@ -1886,7 +1944,7 @@ mod tests {
     /// `execute_sql`'s row cap (don't dump unbounded JSON to the LLM).
     #[test]
     fn chrome_main_thread_hotspots_sql_clamps_limit_to_max_rows() {
-        let sql = chrome_main_thread_hotspots_sql(None, None, None, Some(99_999))
+        let sql = chrome_main_thread_hotspots_sql(None, None, None, None, Some(99_999))
             .expect("oversized limit must clamp, not error");
         assert!(
             sql.contains(&format!("LIMIT {MAX_ROWS}")),
@@ -1896,7 +1954,7 @@ mod tests {
 
     #[test]
     fn chrome_main_thread_hotspots_sql_rejects_zero_limit() {
-        let err = chrome_main_thread_hotspots_sql(None, None, None, Some(0))
+        let err = chrome_main_thread_hotspots_sql(None, None, None, None, Some(0))
             .expect_err("limit=0 must error");
         assert!(
             err.to_string().contains("limit"),
