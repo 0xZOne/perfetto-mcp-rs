@@ -62,10 +62,14 @@ enum Command {
     /// Does NOT remove the binary itself — the shell wrapper handles that
     /// after this exits (a running .exe can't delete itself on Windows).
     Uninstall(UninstallArgs),
+    /// Check whether a newer release is available on GitHub.
+    /// Exits 0 if up to date (or ahead of releases — local dev build),
+    /// 2 if a newer release exists, 1 on network or parse error.
+    CheckUpdate,
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> std::process::ExitCode {
     let mut cli = Cli::parse();
 
     // `.take()` replaces with None without moving the rest of `cli`, so the
@@ -73,9 +77,22 @@ async fn main() -> anyhow::Result<()> {
     // `match cli.command { ... None => run_server(cli) }` would be a partial
     // move and fail to compile.
     match cli.command.take() {
-        Some(Command::Install(a)) => install::run_install(a),
-        Some(Command::Uninstall(a)) => install::run_uninstall(a),
-        None => run_server(cli).await,
+        Some(Command::Install(a)) => result_to_exit_code(install::run_install(a)),
+        Some(Command::Uninstall(a)) => result_to_exit_code(install::run_uninstall(a)),
+        Some(Command::CheckUpdate) => perfetto_mcp_rs::check_update::run().await,
+        None => result_to_exit_code(run_server(cli).await),
+    }
+}
+
+/// Map an `anyhow::Result<()>` to `ExitCode` while preserving the
+/// pre-v0.12.0 behaviour: success → 0, error → print to stderr and exit 1.
+fn result_to_exit_code(r: anyhow::Result<()>) -> std::process::ExitCode {
+    match r {
+        Ok(()) => std::process::ExitCode::from(0),
+        Err(e) => {
+            eprintln!("error: {e:#}");
+            std::process::ExitCode::from(1)
+        }
     }
 }
 
