@@ -592,7 +592,13 @@ impl PerfettoMcpServer {
                        trace_processor accepts — content-sniffed, not by extension). \
                        Calling again with a new path replaces the active \
                        trace; cached `trace_processor_shell` instances make repeat loads \
-                       near-zero-cost."
+                       near-zero-cost.\n\
+                       \n\
+                       Errors when: the file doesn't exist, isn't a valid Perfetto \
+                       trace, or `trace_processor_shell` fails to parse it (corrupt \
+                       trace, version mismatch). On first run only, also errors if the \
+                       `trace_processor_shell` binary fails to download from the \
+                       Perfetto LUCI bucket."
     )]
     async fn load_trace(
         &self,
@@ -623,8 +629,9 @@ impl PerfettoMcpServer {
     #[tool(
         name = "execute_sql",
         description = "Run a PerfettoSQL query against the loaded trace and return rows as \
-                       columnar JSON. Aggregates are strongly preferred over raw row data; \
-                       results are capped at 5000 rows.\n\
+                       columnar JSON. Read-only against trace data; SQLite operates \
+                       in-memory per session. Aggregates are strongly preferred over raw \
+                       row data; results are capped at 5000 rows.\n\
                        \n\
                        Use when: composing analyses not covered by the dedicated tools — \
                        custom aggregations, joins across stdlib modules, or queries against \
@@ -749,8 +756,10 @@ impl PerfettoMcpServer {
                        don't write `SELECT * FROM list_table_structure` inside \
                        `execute_sql`.\n\
                        \n\
-                       Parameters: `table_name` is the exact table or view name \
-                       (case-sensitive).\n\
+                       Parameters: `table_name` (string) — the exact table or view \
+                       name as it appears in `list_tables` output. Case-sensitive; \
+                       does not accept GLOB patterns or partial matches. Also \
+                       accepts the alias `name` (v0.11.3+).\n\
                        \n\
                        Errors when: the table doesn't exist or has no columns. Call \
                        `list_tables` first if uncertain about the name."
@@ -786,7 +795,7 @@ impl PerfettoMcpServer {
     #[tool(
         name = "list_processes",
         description = "List every process captured in the trace: upid (trace-internal \
-                       id), pid (OS pid), name, start_ts, end_ts.\n\
+                       id), pid (OS pid), name, start_ts, end_ts. Read-only.\n\
                        \n\
                        Use when: entry point for Android and Linux trace analysis, or \
                        picking the right `pid`/`upid` to feed into `list_threads_in_process` \
@@ -795,10 +804,12 @@ impl PerfettoMcpServer {
                        Don't use for: Chrome traces — the dedicated `chrome_*` tools \
                        answer most common questions without process-level navigation.\n\
                        \n\
-                       Parameters: none.\n\
+                       Parameters: none — operates on the loaded trace.\n\
                        \n\
                        Empty result: rare; would mean the trace captured no process \
-                       metadata at all."
+                       metadata at all.\n\
+                       \n\
+                       Errors when: no trace is loaded — call `load_trace` first."
     )]
     async fn list_processes(
         &self,
@@ -892,7 +903,8 @@ impl PerfettoMcpServer {
         description = "Summarize the worst scroll jank frames in a Chrome trace: \
                        cause_of_jank, sub_cause_of_jank, delay_since_last_frame, \
                        event_latency_id, scroll_id, vsync_interval. One row per janky \
-                       frame, sorted by delay_since_last_frame DESC, limit 100.\n\
+                       frame, sorted by delay_since_last_frame DESC, limit 100. \
+                       Read-only.\n\
                        \n\
                        Use when: investigating jank reports, finding scroll regressions, \
                        ranking jank causes. Prefer over hand-rolling SQL on \
@@ -901,6 +913,8 @@ impl PerfettoMcpServer {
                        Don't use for: non-Chrome traces (will error). For per-frame \
                        causes outside the top 100, drop to `execute_sql` against the \
                        same view.\n\
+                       \n\
+                       Parameters: none — operates on the loaded trace.\n\
                        \n\
                        Empty result: no janky frames detected (clean trace) or no \
                        scrolls occurred during capture."
@@ -921,7 +935,7 @@ impl PerfettoMcpServer {
     #[tool(
         name = "chrome_page_load_summary",
         description = "Summarize each page navigation in a Chrome trace: navigation id, \
-                       URL, FCP / LCP / DCL / load timings in ms.\n\
+                       URL, FCP / LCP / DCL / load timings in ms. Read-only.\n\
                        \n\
                        Use when: comparing page-load timings across navigations, finding \
                        slow loads, baselining web-vitals before/after a change. Prefer \
@@ -930,6 +944,8 @@ impl PerfettoMcpServer {
                        Don't use for: non-Chrome traces (will error). For sub-event \
                        timings inside one navigation, drop to `execute_sql` against the \
                        `chrome.page_loads` module.\n\
+                       \n\
+                       Parameters: none — operates on the loaded trace.\n\
                        \n\
                        Empty result: no navigations occurred during capture (e.g. trace \
                        started after the page was already loaded)."
@@ -1009,7 +1025,7 @@ impl PerfettoMcpServer {
         name = "chrome_startup_summary",
         description = "Summarize Chrome browser startup events: id, name, launch_cause, \
                        startup_duration_ms (first_visible_content_ts - \
-                       startup_begin_ts), browser_upid.\n\
+                       startup_begin_ts), browser_upid. Read-only.\n\
                        \n\
                        Use when: measuring time-to-first-visible-content for cold \
                        starts, comparing launch causes (NEW_WINDOW vs CMD_LINE vs \
@@ -1018,6 +1034,8 @@ impl PerfettoMcpServer {
                        Don't use for: non-Chrome traces (will error). Browser-process \
                        work during steady state is covered by \
                        `chrome_main_thread_hotspots`.\n\
+                       \n\
+                       Parameters: none — operates on the loaded trace.\n\
                        \n\
                        Empty result: trace started after the browser was already \
                        running (most cases — startup is captured only when tracing \
@@ -1040,7 +1058,7 @@ impl PerfettoMcpServer {
         name = "chrome_web_content_interactions",
         description = "Rank web content interactions in a Chrome trace by duration: id, \
                        ts, dur_ms, interaction_type, renderer_upid. Sorted by dur_ms \
-                       DESC, limit 100.\n\
+                       DESC, limit 100. Read-only.\n\
                        \n\
                        Use when: INP (Interaction to Next Paint) analysis, reproducing \
                        user-felt latency, finding slow click/tap/keyboard handlers.\n\
@@ -1048,6 +1066,8 @@ impl PerfettoMcpServer {
                        Don't use for: non-Chrome traces (will error). For interactions \
                        outside the top 100 or filtered by `interaction_type`, drop to \
                        `execute_sql` against `chrome.web_content_interactions`.\n\
+                       \n\
+                       Parameters: none — operates on the loaded trace.\n\
                        \n\
                        Empty result: no interactions captured (trace started before \
                        user input or interaction tracking was disabled in tracing \
