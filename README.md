@@ -12,7 +12,7 @@
 
 An [MCP](https://modelcontextprotocol.io) server for analyzing
 [Perfetto](https://perfetto.dev) traces with LLMs. Point Claude Code (or any
-MCP client) at a `.perfetto-trace` / `.pftrace` file and query it with
+MCP client) at a Perfetto trace file (`.pftrace` / `.perfetto-trace` / `.bin` / etc. — content-sniffed) and query it with
 PerfettoSQL.
 
 Backed by `trace_processor_shell` — downloaded automatically on first run, no
@@ -171,7 +171,7 @@ it in place.
 
 | Tool | Purpose |
 |---|---|
-| `load_trace` | Open a `.perfetto-trace` / `.pftrace` file (must be called first) |
+| `load_trace` | Open a Perfetto trace file (any trace_processor-readable format: `.pftrace`, `.perfetto-trace`, `.bin`, etc. — must be called first) |
 | `list_tables` | List tables/views in the loaded trace, optional GLOB filter |
 | `list_table_structure` | Show column names and types for a table |
 | `execute_sql` | Run a PerfettoSQL query, returns columnar JSON `{columns, rows}` (max 5000 rows) |

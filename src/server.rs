@@ -148,7 +148,8 @@ where
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LoadTraceParams {
-    /// Absolute path to a Perfetto trace file (.perfetto-trace or .pftrace).
+    /// Absolute path to a Perfetto trace file (.pftrace, .perfetto-trace, .bin,
+    /// or any other trace_processor-readable format — content-sniffed, not by extension).
     #[serde(alias = "trace_path")]
     pub path: String,
 }
@@ -278,7 +279,8 @@ pub struct ColumnInfo {
 /// frameworks or MCP clients that do route `instructions` into the system
 /// prompt get the nudge for free.
 pub const STDLIB_INSTRUCTIONS: &str = "Perfetto trace analysis server. \
-    Start by calling load_trace with a path to a .perfetto-trace or .pftrace file, \
+    Start by calling load_trace with a path to a Perfetto trace file (.pftrace, \
+    .perfetto-trace, .bin, or any other trace_processor-readable format), \
     then use list_tables and list_table_structure to discover the schema, and \
     execute_sql to query.\n\
     \n\
@@ -585,8 +587,10 @@ impl PerfettoMcpServer {
                        perfetto-mcp-rs only reads the resulting file) or for streaming \
                        URLs (path must be a complete file on local disk).\n\
                        \n\
-                       Parameters: `path` is an absolute path to a `.perfetto-trace` or \
-                       `.pftrace` file. Calling again with a new path replaces the active \
+                       Parameters: `path` is an absolute path to a Perfetto trace file \
+                       (`.pftrace`, `.perfetto-trace`, `.bin`, or any other format \
+                       trace_processor accepts — content-sniffed, not by extension). \
+                       Calling again with a new path replaces the active \
                        trace; cached `trace_processor_shell` instances make repeat loads \
                        near-zero-cost."
     )]

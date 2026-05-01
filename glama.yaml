@@ -4,7 +4,7 @@ metadata:
   name: perfetto-mcp-rs
   description: >-
     MCP server for Perfetto trace analysis. Runs PerfettoSQL queries on
-    .perfetto-trace / .pftrace files via auto-downloaded trace_processor_shell,
+    Perfetto trace files (.pftrace / .perfetto-trace / .bin and other trace_processor-readable formats) via auto-downloaded trace_processor_shell,
     with dedicated Chrome tools for page loads, scroll jank, main-thread
     hotspots, and stdlib module discovery.
   version: "0.12.2"
@@ -37,7 +37,7 @@ spec:
 
   tools:
     - name: load_trace
-      description: "Load a Perfetto trace file (.perfetto-trace / .pftrace) into trace_processor."
+      description: "Load a Perfetto trace file (.pftrace / .perfetto-trace / .bin / any trace_processor-readable format) into trace_processor."
     - name: execute_sql
       description: "Run a PerfettoSQL query against the loaded trace."
     - name: list_tables
