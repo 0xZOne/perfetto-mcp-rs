@@ -676,7 +676,9 @@ impl PerfettoMcpServer {
         description = "List tables and views in the loaded trace. Read-only.\n\
                        \n\
                        Use when: exploring an unfamiliar trace or verifying a table \
-                       exists before writing SQL.\n\
+                       exists before writing SQL. Underlying SQL engine is SQLite, \
+                       so the catalog tables common in other SQL engines aren't \
+                       present — this MCP tool is the schema introspection path.\n\
                        \n\
                        Don't use for: queries against known stdlib modules — go \
                        straight to `execute_sql` with `INCLUDE PERFETTO MODULE`. \
