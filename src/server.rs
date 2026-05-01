@@ -666,24 +666,26 @@ impl PerfettoMcpServer {
 
     #[tool(
         name = "list_tables",
-        description = "Discover what tables and views the current trace exposes.\n\
+        description = "List tables and views in the loaded trace. Read-only.\n\
                        \n\
-                       Use when: exploring an unfamiliar trace, or verifying a table \
-                       exists before writing a query against it.\n\
+                       Use when: exploring an unfamiliar trace or verifying a table \
+                       exists before writing SQL.\n\
                        \n\
-                       Don't use for: cases where you already know which stdlib module \
-                       to INCLUDE — go straight to `execute_sql`. Don't reference this \
-                       tool name inside SQL; it's a separate MCP tool, not a SQL \
-                       function — call it via the tool API.\n\
+                       Don't use for: queries against known stdlib modules — go \
+                       straight to `execute_sql` with `INCLUDE PERFETTO MODULE`. \
+                       Don't reference this tool name inside SQL; it's a separate \
+                       MCP tool, not a SQL function — call it via the tool API.\n\
                        \n\
-                       Parameters: optional `pattern` is a GLOB filter (e.g. `chrome_*`, \
-                       `slice*`). Internal stdlib tables (names starting with `_`) are \
-                       hidden when no pattern is set; pass an explicit pattern to bypass \
-                       the filter.\n\
+                       Parameters: optional `pattern` — SQLite GLOB filter (e.g. \
+                       `chrome_*` for chrome stdlib views, `slice*` for the slice \
+                       table family). Without it, internal stdlib tables (`_*`) \
+                       are hidden.\n\
                        \n\
-                       Empty result: no tables matched. If a table from public docs is \
-                       missing, retry with an explicit pattern in case it's marked \
-                       internal."
+                       Empty result: no tables matched the pattern. If a doc-listed \
+                       table is missing, retry with an explicit pattern in case \
+                       it's marked internal.\n\
+                       \n\
+                       Errors when: no trace is loaded — call `load_trace` first."
     )]
     async fn list_tables(
         &self,
