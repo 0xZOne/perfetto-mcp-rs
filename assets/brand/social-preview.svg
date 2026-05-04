@@ -7,7 +7,7 @@
       <stop offset="0.58" stop-color="#17304A"/>
       <stop offset="1" stop-color="#1C405F"/>
     </linearGradient>
-    <linearGradient id="spPanel" x1="174" y1="110" x2="1104" y2="350" gradientUnits="userSpaceOnUse">
+    <linearGradient id="spPanel" x1="120" y1="92" x2="1160" y2="372" gradientUnits="userSpaceOnUse">
       <stop stop-color="#101826"/>
       <stop offset="1" stop-color="#18324B"/>
     </linearGradient>
@@ -27,12 +27,12 @@
       <stop stop-color="#B9F5FF"/>
       <stop offset="1" stop-color="#75D2FF"/>
     </linearGradient>
-    <linearGradient id="spTraceFade" x1="126" y1="472" x2="1154" y2="472" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#4D6885" stop-opacity="0.15"/>
-      <stop offset="0.5" stop-color="#76CDEB" stop-opacity="0.46"/>
-      <stop offset="1" stop-color="#4D6885" stop-opacity="0.15"/>
+    <linearGradient id="spTraceFade" x1="260" y1="454" x2="1020" y2="454" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4D6885" stop-opacity="0.08"/>
+      <stop offset="0.5" stop-color="#76CDEB" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#4D6885" stop-opacity="0.08"/>
     </linearGradient>
-    <filter id="spShadow" x="108" y="68" width="1064" height="300" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+    <filter id="spShadow" x="72" y="60" width="1136" height="330" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
       <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#07101A" flood-opacity="0.30"/>
     </filter>
   </defs>
@@ -46,24 +46,22 @@
   <path d="M112 578H1168" stroke="#496780" stroke-opacity="0.20" stroke-width="2" stroke-linecap="round"/>
 
   <g opacity="0.34">
-    <path d="M126 434H1154" stroke="url(#spTraceFade)" stroke-width="6" stroke-linecap="round"/>
-    <path d="M126 474H1154" stroke="url(#spTraceFade)" stroke-width="6" stroke-linecap="round"/>
-    <path d="M126 514H1154" stroke="url(#spTraceFade)" stroke-width="6" stroke-linecap="round"/>
+    <path d="M260 468H1020" stroke="url(#spTraceFade)" stroke-width="3" stroke-linecap="round"/>
   </g>
 
-  <g opacity="0.92">
-    <rect x="174" y="426" width="182" height="16" rx="8" fill="url(#spWarm)"/>
-    <rect x="376" y="426" width="72" height="16" rx="8" fill="#F3A281"/>
-    <rect x="520" y="466" width="220" height="16" rx="8" fill="url(#spCool)"/>
-    <rect x="758" y="466" width="96" height="16" rx="8" fill="#76E8D6"/>
-    <rect x="902" y="506" width="136" height="16" rx="8" fill="url(#spGold)"/>
-    <rect x="1054" y="506" width="86" height="16" rx="8" fill="#FFD978"/>
+  <g opacity="0.52">
+    <rect x="274" y="464" width="120" height="8" rx="4" fill="url(#spWarm)"/>
+    <rect x="410" y="464" width="48" height="8" rx="4" fill="#F3A281"/>
+    <rect x="548" y="464" width="146" height="8" rx="4" fill="url(#spCool)"/>
+    <rect x="710" y="464" width="64" height="8" rx="4" fill="#76E8D6"/>
+    <rect x="858" y="464" width="104" height="8" rx="4" fill="url(#spGold)"/>
+    <rect x="978" y="464" width="56" height="8" rx="4" fill="#FFD978"/>
   </g>
 
   <g filter="url(#spShadow)">
-    <rect x="150" y="92" width="980" height="260" rx="42" fill="url(#spPanel)"/>
+    <rect x="110" y="78" width="1060" height="292" rx="46" fill="url(#spPanel)"/>
 
-    <svg x="186" y="112" width="184" height="176" viewBox="82 96 368 300" fill="none">
+    <svg x="158" y="102" width="210" height="202" viewBox="82 96 368 300" fill="none">
       <g transform="translate(0 10)">
         <path d="M118 146H318" stroke="#24384C" stroke-width="18" stroke-linecap="round"/>
         <path d="M118 238H294" stroke="#24384C" stroke-width="18" stroke-linecap="round"/>
@@ -90,15 +88,15 @@
       </g>
     </svg>
 
-    <text x="400" y="192" fill="#F4F9FD" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="72" font-weight="800">
+    <text x="404" y="198" fill="#F4F9FD" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="80" font-weight="800">
       <tspan>perfetto</tspan><tspan fill="#A9EEFF">-mcp</tspan><tspan fill="#FFD86F">-rs</tspan>
     </text>
-    <text x="404" y="250" fill="#B9CBDA" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="30" font-weight="600">
+    <text x="410" y="260" fill="#B9CBDA" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="32" font-weight="600">
       Perfetto trace analysis over MCP
     </text>
   </g>
 
-  <text x="640" y="572" text-anchor="middle" fill="#D6E6F5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="28" font-weight="650">
+  <text x="640" y="544" text-anchor="middle" fill="#C8D8E6" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="26" font-weight="600">
     Query traces with LLMs, backed by PerfettoSQL
   </text>
 </svg>
