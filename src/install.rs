@@ -286,10 +286,30 @@ fn aggregate(outcomes: Vec<(&str, Outcome)>) -> Result<()> {
 }
 
 fn register_claude(bin: &Path, scope: ClaudeScope) -> Outcome {
-    if which::which("claude").is_err() {
-        return Outcome::Skipped("claude not found, skipping".into());
+    if which::which("claude").is_ok() {
+        return register_claude_via_cli(bin, scope);
     }
+    // CLI not on PATH. Two independent products may still be present:
+    // Claude Desktop (its own JSON config) and Claude Code (CLI installed
+    // but PATH-hidden — the `curl|sh` subshell case). Detect both
+    // independently and surface separate hints; quiet-skip only if neither
+    // signals.
+    //
+    // Claude Desktop fallback is gated to scope=User: Local/Project are
+    // Claude Code-only concepts without a Desktop analog, so silently
+    // rerouting to Desktop's single global config would violate intent.
+    let has_desktop = scope == ClaudeScope::User && detect_claude_desktop();
+    let has_cli_config = claude_code_present_indirectly();
+    if !has_desktop && !has_cli_config {
+        return Outcome::Skipped("claude not installed".into());
+    }
+    Outcome::Manual {
+        headline: "detected — needs one-time manual setup (CLI not on PATH)".into(),
+        body: claude_manual_install_body(bin, scope, has_desktop, has_cli_config),
+    }
+}
 
+fn register_claude_via_cli(bin: &Path, scope: ClaudeScope) -> Outcome {
     let bin_str = bin.to_string_lossy().to_string();
     let scope_str = scope.as_str();
 
@@ -430,11 +450,153 @@ fn codex_manual_install_outcome(bin: &Path) -> Outcome {
     }
 }
 
-fn deregister_claude(scope: ClaudeScope) -> Outcome {
-    if which::which("claude").is_err() {
-        return Outcome::Skipped("claude not found, skipping".into());
+/// Detect Claude Desktop (Anthropic's GUI chat app — distinct from the
+/// Claude Code CLI). Probes the macOS `.app` bundle and the OS-specific
+/// data dir; the data dir is created the first time Claude Desktop runs,
+/// regardless of platform, making it the most portable signal.
+fn detect_claude_desktop() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if Path::new("/Applications/Claude.app").exists() {
+            return true;
+        }
+        if let Some(home) = dirs::home_dir() {
+            if home.join("Applications/Claude.app").exists() {
+                return true;
+            }
+        }
     }
+    if let Some(p) = claude_desktop_config_dir() {
+        if p.exists() {
+            return true;
+        }
+    }
+    false
+}
 
+/// Per-platform Claude Desktop data dir (the parent of
+/// `claude_desktop_config.json`). Uses `dirs::config_dir()` because its
+/// platform mapping happens to match Claude Desktop's actual layout:
+/// macOS → `~/Library/Application Support`, Windows → `%APPDATA%`,
+/// Linux → `~/.config`.
+fn claude_desktop_config_dir() -> Option<PathBuf> {
+    dirs::config_dir().map(|p| p.join("Claude"))
+}
+
+fn claude_desktop_config_path() -> Option<PathBuf> {
+    claude_desktop_config_dir().map(|d| d.join("claude_desktop_config.json"))
+}
+
+/// "Is Claude Code (CLI) installed?" probe for the no-PATH path.
+/// `~/.claude.json` is the user-scope config the CLI manages; `~/.claude/`
+/// can hold the bootstrapped binary on installs that drop into
+/// `~/.claude/local/`. Either presence is a strong "Claude Code has been
+/// used here" signal that survives PATH-hidden subshells.
+fn claude_code_present_indirectly() -> bool {
+    if let Some(home) = dirs::home_dir() {
+        if home.join(".claude.json").exists() {
+            return true;
+        }
+        if home.join(".claude").exists() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Build the install-side Manual body. Conditionally includes a Claude
+/// Desktop section, a Claude Code (CLI) section, or both — depending on
+/// which products were actually detected. Kept in one function so the
+/// interleaving formatting (header, two product subsections, separators)
+/// stays readable.
+fn claude_manual_install_body(
+    bin: &Path,
+    scope: ClaudeScope,
+    has_desktop: bool,
+    has_cli_config: bool,
+) -> String {
+    let mut body = String::from(
+        "Claude CLI not on PATH. Paste-ready steps below for whichever \
+         Claude products you have installed:\n\n",
+    );
+    if has_desktop {
+        let snippet = mcp_servers_json_snippet(bin);
+        let cfg_path = claude_desktop_config_path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "claude_desktop_config.json".into());
+        body.push_str(&format!(
+            "Claude Desktop:\n\
+             Add this to {cfg_path} (create it if missing), then restart \
+             Claude Desktop:\n\
+             \n\
+             {snippet}\n"
+        ));
+        if has_cli_config {
+            body.push('\n');
+        }
+    }
+    if has_cli_config {
+        body.push_str(&format!(
+            "Claude Code (CLI):\n\
+             From a shell where `claude` is on PATH, run:\n\
+             \n\
+            \x20   claude mcp add {SERVER_NAME} --scope {scope} -- {}",
+            bin.display()
+        ));
+    }
+    body
+}
+
+/// Build the uninstall-side Manual body — symmetric to install.
+fn claude_manual_uninstall_body(
+    scope: ClaudeScope,
+    has_desktop: bool,
+    has_cli_config: bool,
+) -> String {
+    let mut body = String::from(
+        "Claude CLI not on PATH. Cleanup steps for whichever Claude \
+         products you have:\n\n",
+    );
+    if has_desktop {
+        let cfg_path = claude_desktop_config_path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "claude_desktop_config.json".into());
+        body.push_str(&format!(
+            "Claude Desktop:\n\
+             Open {cfg_path} and remove the `{SERVER_NAME}` entry under \
+             `mcpServers`, then restart Claude Desktop.\n"
+        ));
+        if has_cli_config {
+            body.push('\n');
+        }
+    }
+    if has_cli_config {
+        body.push_str(&format!(
+            "Claude Code (CLI):\n\
+             From a shell where `claude` is on PATH, run:\n\
+             \n\
+            \x20   claude mcp remove {SERVER_NAME} --scope {scope}"
+        ));
+    }
+    body
+}
+
+fn deregister_claude(scope: ClaudeScope) -> Outcome {
+    if which::which("claude").is_ok() {
+        return deregister_claude_via_cli(scope);
+    }
+    let has_desktop = scope == ClaudeScope::User && detect_claude_desktop();
+    let has_cli_config = claude_code_present_indirectly();
+    if !has_desktop && !has_cli_config {
+        return Outcome::Skipped("claude not installed".into());
+    }
+    Outcome::Manual {
+        headline: "detected — needs manual cleanup (CLI not on PATH)".into(),
+        body: claude_manual_uninstall_body(scope, has_desktop, has_cli_config),
+    }
+}
+
+fn deregister_claude_via_cli(scope: ClaudeScope) -> Outcome {
     // No `mcp list` probe — list is not passive (it spawns visible stdio
     // servers for health checks). Attempt `remove` and classify the stderr.
     match run_cmd(
@@ -555,9 +717,12 @@ fn detect_qoder() -> bool {
     false
 }
 
-/// Build the JSON snippet a user pastes into Qoder Settings → MCP → + Add.
-/// Uses serde_json so backslashes in Windows paths are escaped correctly.
-fn qoder_snippet(bin: &Path) -> String {
+/// Build a `{ "mcpServers": { "<name>": { "command": "<path>" } } }` JSON
+/// snippet. Qoder Settings → MCP → + Add and Claude Desktop's
+/// `claude_desktop_config.json` both accept this exact format, so they
+/// share this builder. Uses serde_json so backslashes in Windows paths
+/// are escaped correctly.
+fn mcp_servers_json_snippet(bin: &Path) -> String {
     let value = serde_json::json!({
         "mcpServers": {
             SERVER_NAME: {
@@ -565,8 +730,8 @@ fn qoder_snippet(bin: &Path) -> String {
             }
         }
     });
-    // Pretty-print is the readable form Qoder's UI accepts; serde_json never
-    // fails on a value built from owned data, so unwrap is sound here.
+    // Pretty-print is the readable form both clients accept; serde_json
+    // never fails on a value built from owned data, so unwrap is sound.
     serde_json::to_string_pretty(&value)
         .expect("serde_json::to_string_pretty cannot fail on owned Value")
 }
@@ -575,7 +740,7 @@ fn register_qoder(bin: &Path) -> Outcome {
     if !detect_qoder() {
         return Outcome::Skipped("Qoder not found, skipping".into());
     }
-    let snippet = qoder_snippet(bin);
+    let snippet = mcp_servers_json_snippet(bin);
     let body = format!(
         "Open Qoder Settings → MCP → + Add and paste this JSON:\n\
          \n\
@@ -789,12 +954,56 @@ mod tests {
     }
 
     #[test]
-    fn qoder_snippet_contains_server_name_and_command() {
+    fn claude_manual_install_body_includes_desktop_section_when_detected() {
         let bin = PathBuf::from("/usr/local/bin/perfetto-mcp-rs");
-        let s = qoder_snippet(&bin);
+        let body = claude_manual_install_body(&bin, ClaudeScope::User, true, false);
+        // Desktop section present, CLI section absent.
+        assert!(body.contains("Claude Desktop:"));
+        assert!(!body.contains("Claude Code (CLI):"));
+        // Body embeds the JSON snippet (verified separately above).
+        assert!(body.contains("\"mcpServers\""));
+    }
+
+    #[test]
+    fn claude_manual_install_body_includes_cli_section_when_detected() {
+        let bin = PathBuf::from("/usr/local/bin/perfetto-mcp-rs");
+        let body = claude_manual_install_body(&bin, ClaudeScope::User, false, true);
+        assert!(!body.contains("Claude Desktop:"));
+        assert!(body.contains("Claude Code (CLI):"));
+        // CLI hint must include the actual paste-ready command with scope
+        // and binary path the caller passed in.
+        assert!(body.contains("claude mcp add perfetto-mcp-rs --scope user --"));
+        assert!(body.contains("/usr/local/bin/perfetto-mcp-rs"));
+    }
+
+    #[test]
+    fn claude_manual_install_body_includes_both_sections_when_both_detected() {
+        let bin = PathBuf::from("/usr/local/bin/perfetto-mcp-rs");
+        let body = claude_manual_install_body(&bin, ClaudeScope::User, true, true);
+        assert!(body.contains("Claude Desktop:"));
+        assert!(body.contains("Claude Code (CLI):"));
+        // Order: Desktop block before CLI block.
+        let desktop_idx = body.find("Claude Desktop:").unwrap();
+        let cli_idx = body.find("Claude Code (CLI):").unwrap();
+        assert!(desktop_idx < cli_idx);
+    }
+
+    #[test]
+    fn claude_manual_install_body_propagates_local_scope_into_cli_hint() {
+        // Local/Project scope skips the Desktop fallback (gated upstream),
+        // but the CLI hint must echo the scope the user requested.
+        let bin = PathBuf::from("/usr/local/bin/perfetto-mcp-rs");
+        let body = claude_manual_install_body(&bin, ClaudeScope::Local, false, true);
+        assert!(body.contains("--scope local"));
+    }
+
+    #[test]
+    fn mcp_servers_json_snippet_contains_server_name_and_command() {
+        let bin = PathBuf::from("/usr/local/bin/perfetto-mcp-rs");
+        let s = mcp_servers_json_snippet(&bin);
         // Must be valid JSON the user can paste directly.
         let parsed: serde_json::Value =
-            serde_json::from_str(&s).expect("qoder_snippet must emit valid JSON");
+            serde_json::from_str(&s).expect("snippet must emit valid JSON");
         assert_eq!(
             parsed["mcpServers"][SERVER_NAME]["command"],
             "/usr/local/bin/perfetto-mcp-rs"
@@ -802,14 +1011,14 @@ mod tests {
     }
 
     #[test]
-    fn qoder_snippet_escapes_windows_backslashes() {
-        // serde_json must escape `\` so the pasted JSON parses inside Qoder.
-        // Manual string-formatting would be a footgun; this guards against
-        // someone "simplifying" qoder_snippet later.
+    fn mcp_servers_json_snippet_escapes_windows_backslashes() {
+        // serde_json must escape `\` so the pasted JSON parses inside the
+        // target client. Manual string-formatting would be a footgun; this
+        // guards against someone "simplifying" the builder later.
         let bin = PathBuf::from(r"C:\Users\me\.local\bin\perfetto-mcp-rs.exe");
-        let s = qoder_snippet(&bin);
+        let s = mcp_servers_json_snippet(&bin);
         let parsed: serde_json::Value =
-            serde_json::from_str(&s).expect("qoder_snippet must emit valid JSON");
+            serde_json::from_str(&s).expect("snippet must emit valid JSON");
         assert_eq!(
             parsed["mcpServers"][SERVER_NAME]["command"],
             r"C:\Users\me\.local\bin\perfetto-mcp-rs.exe"
