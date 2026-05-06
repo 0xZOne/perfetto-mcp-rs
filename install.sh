@@ -90,10 +90,17 @@ resolve_version() {
     printf '%s' "$VERSION"
     return
   fi
-  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+  # Best-effort tag lookup for the display message only — the download
+  # itself uses `releases/latest/download/<asset>` (no API call), so we
+  # tolerate failure here. The GitHub anonymous API is rate-limited to
+  # 60 req/hour per IP; corporate NAT / public Wi-Fi can hit the cap and
+  # the old code aborted with "could not resolve release tag" even
+  # though no API call was strictly necessary.
+  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
     | grep -o '"tag_name":[[:space:]]*"[^"]*"' \
     | head -1 \
-    | sed 's/.*"\([^"]*\)"$/\1/'
+    | sed 's/.*"\([^"]*\)"$/\1/' \
+    || true
 }
 
 add_to_user_path_windows() {
@@ -145,10 +152,16 @@ main() {
     info "Installing pinned release ${VERSION} from github.com/${REPO}"
   fi
   tag="$(resolve_version)"
-  [ -n "$tag" ] || err "could not resolve release tag"
-  info "Installing ${BIN_NAME} ${tag} (${platform})"
+  display_tag="${tag:-latest}"
+  info "Installing ${BIN_NAME} ${display_tag} (${platform})"
 
-  url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
+  # Latest path uses the GitHub redirect (no API call → no rate limit).
+  # Pinned path uses the direct download URL with the user-supplied tag.
+  if [ "$VERSION" = "latest" ]; then
+    url="https://github.com/${REPO}/releases/latest/download/${asset}"
+  else
+    url="https://github.com/${REPO}/releases/download/${VERSION}/${asset}"
+  fi
   tmp="$(mktemp)"
   trap 'rm -f "$tmp"' EXIT INT TERM
   curl -fsSL --retry 3 -o "$tmp" "$url" \

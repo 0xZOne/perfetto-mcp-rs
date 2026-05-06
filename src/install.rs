@@ -362,9 +362,25 @@ fn register_claude_via_cli(bin: &Path, scope: ClaudeScope) -> Outcome {
         }
     }
 
+    // `--` separates the binary path from `claude mcp add`'s own flags —
+    // the documented form per `claude mcp add --help` ("Add stdio server
+    // with subprocess flags: claude mcp add my-server -- my-command ...").
+    // Theoretical safety: a binary path that happens to start with `-`
+    // (mostly unreachable in practice — installers place at `~/.local/bin/...`
+    // — but cheap robustness vs the wpa-mcp-style "argparse ate my path"
+    // class of bug). Aligns with the codex invocation below and our own
+    // hint string in `claude_manual_install_body`.
     match run_cmd(
         "claude",
-        &["mcp", "add", SERVER_NAME, "--scope", scope_str, &bin_str],
+        &[
+            "mcp",
+            "add",
+            SERVER_NAME,
+            "--scope",
+            scope_str,
+            "--",
+            &bin_str,
+        ],
     ) {
         Ok(_) => Outcome::Done(format!("registered with Claude Code (scope={scope})")),
         Err(e) => Outcome::Failed(claude_scope_hint(scope, format!("add: {e}"))),

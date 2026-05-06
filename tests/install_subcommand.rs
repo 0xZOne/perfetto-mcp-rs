@@ -175,7 +175,7 @@ fn install_from_clean_state_always_remove_then_add() {
         h.recorded_calls(),
         vec![
             "claude|mcp remove perfetto-mcp-rs --scope user".to_string(),
-            format!("claude|mcp add perfetto-mcp-rs --scope user {bin}"),
+            format!("claude|mcp add perfetto-mcp-rs --scope user -- {bin}"),
             "codex|mcp remove perfetto-mcp-rs".to_string(),
             format!("codex|mcp add perfetto-mcp-rs -- {bin}"),
         ],
@@ -201,7 +201,7 @@ fn install_with_existing_entry_removes_then_adds() {
         h.recorded_calls(),
         vec![
             "claude|mcp remove perfetto-mcp-rs --scope user".to_string(),
-            format!("claude|mcp add perfetto-mcp-rs --scope user {bin}"),
+            format!("claude|mcp add perfetto-mcp-rs --scope user -- {bin}"),
             "codex|mcp remove perfetto-mcp-rs".to_string(),
             format!("codex|mcp add perfetto-mcp-rs -- {bin}"),
         ],
