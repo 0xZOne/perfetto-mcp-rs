@@ -28,38 +28,37 @@ LLM through the typical `load_trace` → `list_tables` → `list_table_structure
 
 ## Quick install
 
-**macOS / Linux (Homebrew, recommended):**
+**One-line install (recommended for all platforms)** — downloads the prebuilt
+binary, drops it into `~/.local/bin` (or `%USERPROFILE%\.local\bin` on
+Windows), adds it to your user PATH if needed, and — if Claude Code and/or
+Codex are installed — registers the MCP server automatically. Restart Claude
+Code or start a new Codex session to pick it up.
 
-```sh
-brew tap tooluse-labs/tap
-brew install perfetto-mcp-rs
-# brew prints caveats; run the printed line to register with Claude Code / Codex:
-perfetto-mcp-rs install --binary-path "$(brew --prefix)/bin/perfetto-mcp-rs"
-```
-
-**Rust developers (`cargo install`):**
-
-```sh
-cargo install --locked perfetto-mcp-rs
-perfetto-mcp-rs install --binary-path "$(which perfetto-mcp-rs)"
-```
-
-**Linux / macOS / Windows (Git Bash, MSYS2, Cygwin) — direct script:**
+Linux / macOS / Windows (Git Bash, MSYS2, Cygwin):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.sh | sh
 ```
 
-**Windows (PowerShell):**
+Windows (PowerShell):
 
 ```powershell
 irm https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/install.ps1 | iex
 ```
 
-Both installers drop the prebuilt binary into `~/.local/bin` (or
-`%USERPROFILE%\.local\bin` on Windows), add it to your user PATH if needed,
-and — if Claude Code and/or Codex are installed — register it automatically.
-Restart Claude Code or start a new Codex session to pick it up.
+**Alternatives** — if you'd rather install through a package manager:
+
+```sh
+# macOS / Linux via Homebrew
+brew tap tooluse-labs/tap
+brew install perfetto-mcp-rs
+# brew prints caveats; run the printed line to register with Claude Code / Codex:
+perfetto-mcp-rs install --binary-path "$(brew --prefix)/bin/perfetto-mcp-rs"
+
+# Rust developers via cargo
+cargo install --locked perfetto-mcp-rs
+perfetto-mcp-rs install --binary-path "$(which perfetto-mcp-rs)"
+```
 
 **Claude scope**: registration defaults to `--scope user` (available from any
 directory). For a project-local install, set `SCOPE=local` (or `project`) and
