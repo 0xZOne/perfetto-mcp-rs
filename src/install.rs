@@ -106,20 +106,24 @@ enum Outcome {
     /// Target client detected but no programmatic registration API exists.
     /// Printed prominently as a multi-line "action required" block.
     ///
-    /// `blocking` controls whether `aggregate` treats this as a failure:
+    /// `blocking` controls how `aggregate` and the wrappers react:
     ///
-    /// - `false` (install side): soft success. The binary IS placed; the
-    ///   user just needs to do a one-time wire-up. Exit code stays 0 so
-    ///   the install wrapper finishes cleanly.
+    /// - `false` — informational. Exit code stays 0; the wrapper proceeds
+    ///   as if everything succeeded. Used when the manual step is
+    ///   recoverable from a delayed perspective: install Manual outcomes
+    ///   (binary IS placed; user just owes a one-time wire-up) and Qoder
+    ///   uninstall (config path undocumented — we can't help further, so
+    ///   trapping the user with a non-zero exit serves no purpose).
     ///
-    /// - `true` (uninstall side): MUST fail aggregate. The user still has
-    ///   a `[mcp_servers.<name>]` entry in some client config that we
-    ///   can't touch programmatically; if exit were 0, the wrapper would
-    ///   delete the binary at uninstall.sh:70 / uninstall.ps1 and leave a
-    ///   dangling MCP entry pointing at a deleted path. Failure keeps the
-    ///   binary in place until the user re-runs uninstall (with
-    ///   `--skip-<client>` after they've done the manual cleanup, or
-    ///   without it once the client is gone).
+    /// - `true` — blocking. Aggregate pushes the headline to
+    ///   `failure_msgs` so the subcommand exits non-zero, which both
+    ///   `uninstall.sh:70` and `uninstall.ps1` interpret as "keep the
+    ///   binary in place." Used by Codex / Claude Desktop uninstall when
+    ///   the user still has a `[mcp_servers.<name>]` entry pointing at a
+    ///   well-known config path; deleting the binary while that entry
+    ///   dangles would silently break MCP integration on next client
+    ///   launch. Caller re-runs uninstall with `--skip-<client>` (or
+    ///   `SKIP_<CLIENT>=1` on the wrapper) after manual cleanup.
     Manual {
         headline: String,
         body: String,
@@ -758,6 +762,10 @@ fn register_qoder(bin: &Path) -> Outcome {
     if !detect_qoder() {
         return Outcome::Skipped("Qoder not found, skipping".into());
     }
+    qoder_manual_install_outcome(bin)
+}
+
+fn qoder_manual_install_outcome(bin: &Path) -> Outcome {
     let snippet = mcp_servers_json_snippet(bin);
     let body = format!(
         "Open Qoder Settings → MCP → + Add and paste this JSON:\n\
@@ -778,15 +786,25 @@ fn deregister_qoder() -> Outcome {
     if !detect_qoder() {
         return Outcome::Skipped("Qoder not found, skipping".into());
     }
-    // Non-blocking by design. Codex (`~/.codex/config.toml`) and Claude
-    // Desktop (per-OS well-known JSON path) document where their MCP
-    // config lives, so we can tell the user *which file to edit* and
-    // blocking the uninstall is a meaningful safety net — they have a
-    // concrete next action. Qoder's config path is undocumented (UI-only
-    // management), so the best we can offer is "open Settings → MCP";
-    // blocking would trap users who can't comply with anything more
-    // specific. If the user forgets, Qoder will surface the dangling
-    // entry on next launch and they can remove it then.
+    qoder_manual_uninstall_outcome()
+}
+
+/// Built as a separate function so tests can hard-assert the
+/// `blocking: false` policy without depending on Qoder being installed
+/// on the test machine. A test that goes through `deregister_qoder` would
+/// vacuously pass on machines without Qoder (most CI), and a future
+/// regression flipping this to `blocking: true` would slip through.
+///
+/// Non-blocking by design. Codex (`~/.codex/config.toml`) and Claude
+/// Desktop (per-OS well-known JSON path) document where their MCP config
+/// lives, so we can tell the user *which file to edit* and blocking the
+/// uninstall is a meaningful safety net — they have a concrete next
+/// action. Qoder's config path is undocumented (UI-only management), so
+/// the best we can offer is "open Settings → MCP"; blocking would trap
+/// users who can't comply with anything more specific. If the user
+/// forgets, Qoder will surface the dangling entry on next launch and
+/// they can remove it then.
+fn qoder_manual_uninstall_outcome() -> Outcome {
     Outcome::Manual {
         headline: "detected — manual cleanup is your responsibility".into(),
         body: format!(
@@ -1027,11 +1045,12 @@ mod tests {
         assert!(body.contains("--scope local"));
     }
 
-    // Lock the install vs uninstall asymmetry: install Manual is a soft
-    // success (binary IS placed; user just needs a one-time wire-up),
-    // uninstall Manual MUST fail aggregate (otherwise the wrapper deletes
-    // the binary while a stale `[mcp_servers.<name>]` entry still points
-    // at it — exactly the bug the upstream review flagged).
+    // Lock blocking semantics: aggregate must propagate `blocking: true`
+    // as failure so wrappers keep the binary in place. Used by Codex /
+    // Claude Desktop uninstall when leaving the binary in place is
+    // necessary to prevent a stale `[mcp_servers.<name>]` entry pointing
+    // at a deleted path. Qoder uninstall is `blocking: false` by design
+    // (see `qoder_manual_uninstall_outcome`).
     #[test]
     fn aggregate_treats_blocking_manual_as_failure() {
         let outcomes = vec![(
@@ -1048,21 +1067,6 @@ mod tests {
         );
     }
 
-    // Pins Qoder's documented asymmetry vs Codex/Claude Desktop: its
-    // config path is undocumented, so blocking the uninstall would trap
-    // users with no concrete file to edit. On test machines without
-    // Qoder this passes vacuously (Skipped); when Qoder IS detected the
-    // outcome MUST be a non-blocking Manual — never a blocking one.
-    #[test]
-    fn qoder_deregister_is_non_blocking_when_detected() {
-        if let Outcome::Manual { blocking, .. } = deregister_qoder() {
-            assert!(
-                !blocking,
-                "Qoder uninstall must be non-blocking — config path is undocumented"
-            );
-        }
-    }
-
     #[test]
     fn aggregate_treats_non_blocking_manual_as_success() {
         let outcomes = vec![(
@@ -1075,8 +1079,35 @@ mod tests {
         )];
         assert!(
             aggregate(outcomes).is_ok(),
-            "install Manual is soft success — binary IS placed, user just wires up"
+            "non-blocking Manual is informational — wrapper proceeds"
         );
+    }
+
+    // Hard-asserts Qoder's blocking policy by calling the outcome
+    // builder directly (NOT `deregister_qoder` — that would short-
+    // circuit to Skipped on machines without Qoder, vacuously passing
+    // even if someone flips the policy back to blocking: true).
+    #[test]
+    fn qoder_uninstall_outcome_is_non_blocking() {
+        match qoder_manual_uninstall_outcome() {
+            Outcome::Manual { blocking, .. } => assert!(
+                !blocking,
+                "Qoder uninstall must be non-blocking — config path is undocumented"
+            ),
+            _ => panic!("qoder_manual_uninstall_outcome must return Manual"),
+        }
+    }
+
+    #[test]
+    fn qoder_install_outcome_is_non_blocking() {
+        let bin = PathBuf::from("/usr/local/bin/perfetto-mcp-rs");
+        match qoder_manual_install_outcome(&bin) {
+            Outcome::Manual { blocking, .. } => assert!(
+                !blocking,
+                "Qoder install Manual is informational; never blocks"
+            ),
+            _ => panic!("qoder_manual_install_outcome must return Manual"),
+        }
     }
 
     #[test]
