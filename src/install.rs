@@ -7,6 +7,10 @@
 //! `dirs::data_local_dir()` cache. Shell wrappers (install.sh / install.ps1)
 //! keep only distribution + platform glue.
 //!
+//! Qoder is handled via `Outcome::Manual` — Qoder has no public programmatic
+//! MCP-registration API yet (UI-only flow per docs.qoder.com), so when Qoder
+//! is detected we emit a paste-ready JSON snippet instead of writing files.
+//!
 //! Uses sync `std::process::Command`; the parent is `#[tokio::main]` but
 //! install/uninstall don't need async — they're one-shot CLI paths.
 
@@ -64,6 +68,12 @@ pub struct InstallArgs {
 
     #[arg(long)]
     pub skip_codex: bool,
+
+    /// Suppress the Qoder paste-ready snippet even when Qoder is detected.
+    /// Qoder has no programmatic MCP-registration API yet, so detection
+    /// triggers a printed JSON snippet rather than file writes.
+    #[arg(long)]
+    pub skip_qoder: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -83,12 +93,23 @@ pub struct UninstallArgs {
 
     #[arg(long)]
     pub skip_codex: bool,
+
+    /// Suppress the Qoder manual-cleanup hint even when Qoder is detected.
+    #[arg(long)]
+    pub skip_qoder: bool,
 }
 
 enum Outcome {
     Done(String),
     Skipped(String),
     Failed(String),
+    /// Target client detected but no programmatic registration API exists.
+    /// Printed prominently as a multi-line "action required" block; treated
+    /// like a soft success by `aggregate` (does NOT cause a non-zero exit).
+    Manual {
+        headline: String,
+        body: String,
+    },
 }
 
 pub fn run_install(args: InstallArgs) -> Result<()> {
@@ -171,6 +192,14 @@ pub fn run_install(args: InstallArgs) -> Result<()> {
                 register_codex(&bin)
             },
         ),
+        (
+            "Qoder",
+            if args.skip_qoder {
+                Outcome::Skipped("--skip-qoder".into())
+            } else {
+                register_qoder(&bin)
+            },
+        ),
     ];
     aggregate(outcomes)
 }
@@ -196,6 +225,14 @@ pub fn run_uninstall(args: UninstallArgs) -> Result<()> {
             },
         ),
         (
+            "Qoder",
+            if args.skip_qoder {
+                Outcome::Skipped("--skip-qoder".into())
+            } else {
+                deregister_qoder()
+            },
+        ),
+        (
             "Cache",
             if args.keep_cache {
                 Outcome::Skipped("--keep-cache".into())
@@ -216,6 +253,12 @@ fn aggregate(outcomes: Vec<(&str, Outcome)>) -> Result<()> {
             Outcome::Failed(msg) => {
                 eprintln!("warning: {label} failed: {msg}");
                 failure_msgs.push(format!("{label}: {msg}"));
+            }
+            Outcome::Manual { headline, body } => {
+                println!("==> {label}: {headline}");
+                for line in body.lines() {
+                    println!("    {line}");
+                }
             }
         }
     }
@@ -364,6 +407,86 @@ fn deregister_codex() -> Outcome {
     match run_cmd("codex", &["mcp", "remove", SERVER_NAME]) {
         Ok(_) => Outcome::Done("deregistered from Codex".into()),
         Err(e) => Outcome::Failed(format!("codex remove: {e}")),
+    }
+}
+
+/// Detect a Qoder installation. Qoder is an Electron-based AI IDE; it
+/// publishes a `qoder` CLI on macOS/Linux and ships an `.app` bundle on
+/// macOS / installer-placed program directory on Windows. We probe all
+/// known locations because users can install through any of them.
+fn detect_qoder() -> bool {
+    if which::which("qoder").is_ok() {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if Path::new("/Applications/Qoder.app").exists() {
+            return true;
+        }
+        if let Some(home) = dirs::home_dir() {
+            if home.join("Applications/Qoder.app").exists() {
+                return true;
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Some(local) = dirs::data_local_dir() {
+            // Default Qoder Windows installer location.
+            if local.join("Programs").join("Qoder").exists() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Build the JSON snippet a user pastes into Qoder Settings → MCP → + Add.
+/// Uses serde_json so backslashes in Windows paths are escaped correctly.
+fn qoder_snippet(bin: &Path) -> String {
+    let value = serde_json::json!({
+        "mcpServers": {
+            SERVER_NAME: {
+                "command": bin.to_string_lossy(),
+            }
+        }
+    });
+    // Pretty-print is the readable form Qoder's UI accepts; serde_json never
+    // fails on a value built from owned data, so unwrap is sound here.
+    serde_json::to_string_pretty(&value)
+        .expect("serde_json::to_string_pretty cannot fail on owned Value")
+}
+
+fn register_qoder(bin: &Path) -> Outcome {
+    if !detect_qoder() {
+        return Outcome::Skipped("Qoder not found, skipping".into());
+    }
+    let snippet = qoder_snippet(bin);
+    let body = format!(
+        "Open Qoder Settings → MCP → + Add and paste this JSON:\n\
+         \n\
+         {snippet}\n\
+         \n\
+         (Qoder has no programmatic MCP-registration API yet; \
+         see https://docs.qoder.com/user-guide/chat/model-context-protocol)"
+    );
+    Outcome::Manual {
+        headline: "detected — needs one-time manual setup".into(),
+        body,
+    }
+}
+
+fn deregister_qoder() -> Outcome {
+    if !detect_qoder() {
+        return Outcome::Skipped("Qoder not found, skipping".into());
+    }
+    Outcome::Manual {
+        headline: "detected — needs manual cleanup".into(),
+        body: format!(
+            "Open Qoder Settings → MCP and remove the `{SERVER_NAME}` entry.\n\
+             (Qoder has no CLI for this yet; the binary and cache will still \
+             be removed below.)"
+        ),
     }
 }
 
@@ -517,6 +640,37 @@ mod tests {
         ));
         assert!(!claude_remove_error_is_not_found("segmentation fault"));
         assert!(!claude_remove_error_is_not_found(""));
+    }
+
+    #[test]
+    fn qoder_snippet_contains_server_name_and_command() {
+        let bin = PathBuf::from("/usr/local/bin/perfetto-mcp-rs");
+        let s = qoder_snippet(&bin);
+        // Must be valid JSON the user can paste directly.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&s).expect("qoder_snippet must emit valid JSON");
+        assert_eq!(
+            parsed["mcpServers"][SERVER_NAME]["command"],
+            "/usr/local/bin/perfetto-mcp-rs"
+        );
+    }
+
+    #[test]
+    fn qoder_snippet_escapes_windows_backslashes() {
+        // serde_json must escape `\` so the pasted JSON parses inside Qoder.
+        // Manual string-formatting would be a footgun; this guards against
+        // someone "simplifying" qoder_snippet later.
+        let bin = PathBuf::from(r"C:\Users\me\.local\bin\perfetto-mcp-rs.exe");
+        let s = qoder_snippet(&bin);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&s).expect("qoder_snippet must emit valid JSON");
+        assert_eq!(
+            parsed["mcpServers"][SERVER_NAME]["command"],
+            r"C:\Users\me\.local\bin\perfetto-mcp-rs.exe"
+        );
+        // Belt-and-braces: the on-the-wire form must contain escaped
+        // backslashes, not raw ones.
+        assert!(s.contains(r"\\"));
     }
 
     #[test]

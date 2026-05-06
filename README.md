@@ -32,7 +32,9 @@ LLM through the typical `load_trace` → `list_tables` → `list_table_structure
 binary, drops it into `~/.local/bin` (or `%USERPROFILE%\.local\bin` on
 Windows), adds it to your user PATH if needed, and — if Claude Code and/or
 Codex are installed — registers the MCP server automatically. Restart Claude
-Code or start a new Codex session to pick it up.
+Code or start a new Codex session to pick it up. If Qoder is detected, the
+installer prints a paste-ready JSON snippet (Qoder has no programmatic
+MCP-registration API yet — open Qoder Settings → MCP → + Add and paste).
 
 Linux / macOS / Windows (Git Bash, MSYS2, Cygwin):
 
