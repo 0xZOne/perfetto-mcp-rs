@@ -426,11 +426,13 @@ fn uninstall_cache_absent_exits_ok() {
 }
 
 // ---------------------------------------------------------------------------
-// Contract 10: CLI missing (empty PATH for claude/codex) → exit 0, skip msg.
+// Contract 10: CLI missing (empty PATH for claude/codex) → exit 0, silent.
+// `Outcome::Absent` means "client not installed" — no acknowledgment line is
+// printed (would be noise for users who don't have those clients).
 // ---------------------------------------------------------------------------
 #[test]
 fn install_cli_missing_skips_gracefully() {
-    // Empty dir on PATH → which::which returns Err → Outcome::Skipped.
+    // Empty dir on PATH → which::which returns Err → Outcome::Absent.
     let tmp = tempfile::tempdir().unwrap();
     let fake_empty = tmp.path().to_path_buf();
 
@@ -445,22 +447,22 @@ fn install_cli_missing_skips_gracefully() {
         .env("LOCALAPPDATA", &h.local_appdata)
         .output()
         .unwrap();
-    assert_success(
-        &out,
-        "CLI-missing install should still succeed (everything skipped)",
-    );
+    assert_success(&out, "CLI-missing install should still succeed silently");
     let combined = format!(
         "{}\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    // The opposite of the old assertion: when no client is installed,
+    // the output should contain NO "==> Claude" / "==> Codex" lines —
+    // those clients are silent under `Outcome::Absent`.
     assert!(
-        combined.contains("claude not installed"),
-        "expected claude-missing message: {combined}"
+        !combined.contains("==> Claude"),
+        "Claude line must not appear when claude is not installed: {combined}"
     );
     assert!(
-        combined.contains("codex not installed"),
-        "expected codex-missing message: {combined}"
+        !combined.contains("==> Codex"),
+        "Codex line must not appear when codex is not installed: {combined}"
     );
 }
 

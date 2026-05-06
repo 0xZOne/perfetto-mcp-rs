@@ -103,6 +103,13 @@ enum Outcome {
     Done(String),
     Skipped(String),
     Failed(String),
+    /// Target client not installed on this system. Silent in `aggregate` —
+    /// printing "Codex skipped: codex not installed" for clients the user
+    /// doesn't even use is just noise. Distinct from `Skipped` (which
+    /// echoes user-opt-out flags like `--skip-claude` so the user sees
+    /// their choice acknowledged) and from `Manual` (which fires when
+    /// the client IS present but we can't programmatically configure).
+    Absent,
     /// Target client detected but no programmatic registration API exists.
     /// Printed prominently as a multi-line "action required" block.
     ///
@@ -285,6 +292,9 @@ fn aggregate(outcomes: Vec<(&str, Outcome)>) -> Result<()> {
                 eprintln!("warning: {label} failed: {msg}");
                 failure_msgs.push(format!("{label}: {msg}"));
             }
+            Outcome::Absent => {
+                // Silent. Client isn't installed — no acknowledgment owed.
+            }
             Outcome::Manual {
                 headline,
                 body,
@@ -316,7 +326,7 @@ fn register_claude(bin: &Path, scope: ClaudeScope) -> Outcome {
         return register_claude_via_cli(bin, scope);
     }
     let Some((has_desktop, has_cli_config)) = detect_claude_products(scope) else {
-        return Outcome::Skipped("claude not installed".into());
+        return Outcome::Absent;
     };
     Outcome::Manual {
         headline: "detected — needs one-time manual setup (CLI not on PATH)".into(),
@@ -401,7 +411,7 @@ fn register_codex(bin: &Path) -> Outcome {
     if codex_present_indirectly() {
         return codex_manual_install_outcome(bin);
     }
-    Outcome::Skipped("codex not installed".into())
+    Outcome::Absent
 }
 
 fn register_codex_via_cli(bin: &Path) -> Outcome {
@@ -632,7 +642,7 @@ fn deregister_claude(scope: ClaudeScope) -> Outcome {
         return deregister_claude_via_cli(scope);
     }
     let Some((has_desktop, has_cli_config)) = detect_claude_products(scope) else {
-        return Outcome::Skipped("claude not installed".into());
+        return Outcome::Absent;
     };
     Outcome::Manual {
         headline: "detected — needs manual cleanup (CLI not on PATH)".into(),
@@ -731,7 +741,7 @@ fn deregister_codex() -> Outcome {
             blocking: true,
         };
     }
-    Outcome::Skipped("codex not installed".into())
+    Outcome::Absent
 }
 
 /// Detect a Qoder installation. Qoder is an Electron-based AI IDE; it
@@ -776,7 +786,7 @@ fn mcp_servers_json_snippet(bin: &Path) -> String {
 
 fn register_qoder(bin: &Path) -> Outcome {
     if !detect_qoder() {
-        return Outcome::Skipped("Qoder not found, skipping".into());
+        return Outcome::Absent;
     }
     qoder_manual_install_outcome(bin)
 }
@@ -800,7 +810,7 @@ fn qoder_manual_install_outcome(bin: &Path) -> Outcome {
 
 fn deregister_qoder() -> Outcome {
     if !detect_qoder() {
-        return Outcome::Skipped("Qoder not found, skipping".into());
+        return Outcome::Absent;
     }
     qoder_manual_uninstall_outcome()
 }
@@ -1080,6 +1090,19 @@ mod tests {
         assert!(
             aggregate(outcomes).is_err(),
             "blocking Manual must propagate as failure so the wrapper keeps the binary"
+        );
+    }
+
+    // Lock the silent-when-absent semantics. `Outcome::Absent` means the
+    // target client isn't installed — no acknowledgment line should be
+    // printed (otherwise users who don't use a given client see noise).
+    // Aggregate must still return Ok (exit code 0) so wrappers proceed.
+    #[test]
+    fn aggregate_treats_absent_as_silent_success() {
+        let outcomes = vec![("Codex", Outcome::Absent)];
+        assert!(
+            aggregate(outcomes).is_ok(),
+            "Absent must not fail aggregate — client just isn't installed"
         );
     }
 
