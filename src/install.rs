@@ -324,25 +324,17 @@ fn register_codex(bin: &Path) -> Outcome {
     if which::which("codex").is_ok() {
         return register_codex_via_cli(bin);
     }
-    // CLI not on PATH — fall back to desktop-app detection. All Codex
-    // surfaces (CLI, VS Code extension, Mac/desktop app) read the same
-    // `~/.codex/config.toml`, so a user with only the desktop app can
-    // still wire up MCP — they just have to edit the TOML themselves.
-    if detect_codex_app() {
+    // CLI not on PATH — fall back to indirect detection. All Codex surfaces
+    // (CLI, VS Code extension, Mac/desktop app) read the same
+    // `~/.codex/config.toml`, so any user with Codex configured can be
+    // helped by a paste-ready TOML snippet — they just have to edit the
+    // file themselves. Without a positive install signal we stay silent;
+    // showing a "if Codex is actually installed..." hint to users who
+    // genuinely don't use Codex is just noise.
+    if codex_present_indirectly() {
         return codex_manual_install_outcome(bin);
     }
-    // No CLI, no detectable desktop app. PATH detection in non-interactive
-    // shells (`curl | sh` from a GUI terminal, sudo, etc.) misses CLIs that
-    // a login shell would resolve, so we hand the user the exact register
-    // command — they can run it from whichever shell sees `codex`.
-    Outcome::Skipped(format!(
-        "codex not found.\n\
-         If Codex is actually installed, register manually from a shell where \
-         `codex` is on PATH:\n\
-         \n\
-        \x20   codex mcp add {SERVER_NAME} -- {}",
-        bin.display()
-    ))
+    Outcome::Skipped("codex not installed".into())
 }
 
 fn register_codex_via_cli(bin: &Path) -> Outcome {
@@ -384,6 +376,27 @@ fn detect_codex_app() -> bool {
     false
 }
 
+/// "Is Codex installed?" probe for the no-CLI path. Returns true if we have
+/// any positive signal that the user is a Codex user — either the Mac
+/// desktop app, or a `~/.codex/` directory created by some Codex surface
+/// (CLI, VS Code extension, Mac app, etc.). The directory survives
+/// uninstall of any single surface as long as login state / config remain,
+/// so it's a robust "user has used Codex" signal across platforms.
+///
+/// Negative result is meant to be silent: don't tell users who genuinely
+/// don't use Codex how to register manually.
+fn codex_present_indirectly() -> bool {
+    if detect_codex_app() {
+        return true;
+    }
+    if let Some(home) = dirs::home_dir() {
+        if home.join(".codex").exists() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Build a paste-ready snippet for `~/.codex/config.toml`. Uses TOML
 /// literal strings (`'...'`) so backslashes and double quotes in the path
 /// pass through unchanged — important for Windows-form paths even though
@@ -403,16 +416,16 @@ fn codex_toml_snippet(bin: &Path) -> String {
 fn codex_manual_install_outcome(bin: &Path) -> Outcome {
     let snippet = codex_toml_snippet(bin);
     let body = format!(
-        "Codex CLI not on PATH but desktop app detected. All Codex \
-         surfaces share `~/.codex/config.toml`; add this and restart the \
-         Codex app:\n\
+        "Codex CLI not on PATH. All Codex surfaces (CLI, Mac/desktop app, \
+         VS Code ext) read the same `~/.codex/config.toml`; add this and \
+         restart Codex:\n\
          \n\
          {snippet}\n\
          (Create `~/.codex/config.toml` if it doesn't exist. \
          Reference: https://developers.openai.com/codex/config-reference)"
     );
     Outcome::Manual {
-        headline: "desktop app detected, CLI missing — needs one-time manual setup".into(),
+        headline: "detected — needs one-time manual setup (CLI not on PATH)".into(),
         body,
     }
 }
@@ -498,23 +511,17 @@ fn deregister_codex() -> Outcome {
             Err(e) => Outcome::Failed(format!("codex remove: {e}")),
         };
     }
-    if detect_codex_app() {
+    if codex_present_indirectly() {
         return Outcome::Manual {
-            headline: "desktop app detected, CLI missing — needs manual cleanup".into(),
+            headline: "detected — needs manual cleanup (CLI not on PATH)".into(),
             body: format!(
                 "Open `~/.codex/config.toml` and remove the \
-                 `[mcp_servers.{SERVER_NAME}]` table, then restart the \
-                 Codex app. (The binary and cache will still be removed below.)"
+                 `[mcp_servers.{SERVER_NAME}]` table, then restart Codex. \
+                 (The binary and cache will still be removed below.)"
             ),
         };
     }
-    Outcome::Skipped(format!(
-        "codex not found.\n\
-         If Codex is actually installed, deregister manually from a shell where \
-         `codex` is on PATH:\n\
-         \n\
-        \x20   codex mcp remove {SERVER_NAME}"
-    ))
+    Outcome::Skipped("codex not installed".into())
 }
 
 /// Detect a Qoder installation. Qoder is an Electron-based AI IDE; it
