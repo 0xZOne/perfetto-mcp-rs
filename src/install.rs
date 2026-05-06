@@ -104,11 +104,26 @@ enum Outcome {
     Skipped(String),
     Failed(String),
     /// Target client detected but no programmatic registration API exists.
-    /// Printed prominently as a multi-line "action required" block; treated
-    /// like a soft success by `aggregate` (does NOT cause a non-zero exit).
+    /// Printed prominently as a multi-line "action required" block.
+    ///
+    /// `blocking` controls whether `aggregate` treats this as a failure:
+    ///
+    /// - `false` (install side): soft success. The binary IS placed; the
+    ///   user just needs to do a one-time wire-up. Exit code stays 0 so
+    ///   the install wrapper finishes cleanly.
+    ///
+    /// - `true` (uninstall side): MUST fail aggregate. The user still has
+    ///   a `[mcp_servers.<name>]` entry in some client config that we
+    ///   can't touch programmatically; if exit were 0, the wrapper would
+    ///   delete the binary at uninstall.sh:70 / uninstall.ps1 and leave a
+    ///   dangling MCP entry pointing at a deleted path. Failure keeps the
+    ///   binary in place until the user re-runs uninstall (with
+    ///   `--skip-<client>` after they've done the manual cleanup, or
+    ///   without it once the client is gone).
     Manual {
         headline: String,
         body: String,
+        blocking: bool,
     },
 }
 
@@ -266,10 +281,17 @@ fn aggregate(outcomes: Vec<(&str, Outcome)>) -> Result<()> {
                 eprintln!("warning: {label} failed: {msg}");
                 failure_msgs.push(format!("{label}: {msg}"));
             }
-            Outcome::Manual { headline, body } => {
+            Outcome::Manual {
+                headline,
+                body,
+                blocking,
+            } => {
                 println!("==> {label}: {headline}");
                 for line in body.lines() {
                     println!("    {line}");
+                }
+                if *blocking {
+                    failure_msgs.push(format!("{label}: {headline}"));
                 }
             }
         }
@@ -295,6 +317,7 @@ fn register_claude(bin: &Path, scope: ClaudeScope) -> Outcome {
     Outcome::Manual {
         headline: "detected — needs one-time manual setup (CLI not on PATH)".into(),
         body: claude_manual_install_body(bin, scope, has_desktop, has_cli_config),
+        blocking: false,
     }
 }
 
@@ -452,6 +475,7 @@ fn codex_manual_install_outcome(bin: &Path) -> Outcome {
     Outcome::Manual {
         headline: "detected — needs one-time manual setup (CLI not on PATH)".into(),
         body,
+        blocking: false,
     }
 }
 
@@ -555,7 +579,9 @@ fn claude_manual_uninstall_body(
 ) -> String {
     let mut body = String::from(
         "Claude CLI not on PATH. Cleanup steps for whichever Claude \
-         products you have:\n\n",
+         products you have (binary will be kept until cleanup is \
+         confirmed; re-run uninstall with `--skip-claude` after manual \
+         cleanup, or once Claude is gone):\n\n",
     );
     if has_desktop {
         let cfg_path = claude_desktop_config_path_display();
@@ -590,6 +616,7 @@ fn deregister_claude(scope: ClaudeScope) -> Outcome {
     Outcome::Manual {
         headline: "detected — needs manual cleanup (CLI not on PATH)".into(),
         body: claude_manual_uninstall_body(scope, has_desktop, has_cli_config),
+        blocking: true,
     }
 }
 
@@ -676,8 +703,10 @@ fn deregister_codex() -> Outcome {
             body: format!(
                 "Open `~/.codex/config.toml` and remove the \
                  `[mcp_servers.{SERVER_NAME}]` table, then restart Codex. \
-                 (The binary and cache will still be removed below.)"
+                 The binary will be kept until you re-run uninstall (with \
+                 `--skip-codex` after manual cleanup, or once Codex is gone)."
             ),
+            blocking: true,
         };
     }
     Outcome::Skipped("codex not installed".into())
@@ -739,6 +768,7 @@ fn register_qoder(bin: &Path) -> Outcome {
     Outcome::Manual {
         headline: "detected — needs one-time manual setup".into(),
         body,
+        blocking: false,
     }
 }
 
@@ -749,10 +779,11 @@ fn deregister_qoder() -> Outcome {
     Outcome::Manual {
         headline: "detected — needs manual cleanup".into(),
         body: format!(
-            "Open Qoder Settings → MCP and remove the `{SERVER_NAME}` entry.\n\
-             (Qoder has no CLI for this yet; the binary and cache will still \
-             be removed below.)"
+            "Open Qoder Settings → MCP and remove the `{SERVER_NAME}` entry. \
+             The binary will be kept until you re-run uninstall (with \
+             `--skip-qoder` after manual cleanup, or once Qoder is gone)."
         ),
+        blocking: true,
     }
 }
 
@@ -982,6 +1013,43 @@ mod tests {
         let bin = PathBuf::from("/usr/local/bin/perfetto-mcp-rs");
         let body = claude_manual_install_body(&bin, ClaudeScope::Local, false, true);
         assert!(body.contains("--scope local"));
+    }
+
+    // Lock the install vs uninstall asymmetry: install Manual is a soft
+    // success (binary IS placed; user just needs a one-time wire-up),
+    // uninstall Manual MUST fail aggregate (otherwise the wrapper deletes
+    // the binary while a stale `[mcp_servers.<name>]` entry still points
+    // at it — exactly the bug the upstream review flagged).
+    #[test]
+    fn aggregate_treats_blocking_manual_as_failure() {
+        let outcomes = vec![(
+            "Claude",
+            Outcome::Manual {
+                headline: "needs cleanup".into(),
+                body: "edit config".into(),
+                blocking: true,
+            },
+        )];
+        assert!(
+            aggregate(outcomes).is_err(),
+            "blocking Manual must propagate as failure so the wrapper keeps the binary"
+        );
+    }
+
+    #[test]
+    fn aggregate_treats_non_blocking_manual_as_success() {
+        let outcomes = vec![(
+            "Claude",
+            Outcome::Manual {
+                headline: "needs setup".into(),
+                body: "paste this".into(),
+                blocking: false,
+            },
+        )];
+        assert!(
+            aggregate(outcomes).is_ok(),
+            "install Manual is soft success — binary IS placed, user just wires up"
+        );
     }
 
     #[test]

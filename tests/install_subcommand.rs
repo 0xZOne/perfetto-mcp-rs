@@ -455,11 +455,11 @@ fn install_cli_missing_skips_gracefully() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        combined.contains("claude not found"),
+        combined.contains("claude not installed"),
         "expected claude-missing message: {combined}"
     );
     assert!(
-        combined.contains("codex not found"),
+        combined.contains("codex not installed"),
         "expected codex-missing message: {combined}"
     );
 }
