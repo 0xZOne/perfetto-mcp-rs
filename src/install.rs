@@ -249,7 +249,19 @@ fn aggregate(outcomes: Vec<(&str, Outcome)>) -> Result<()> {
     for (label, outcome) in &outcomes {
         match outcome {
             Outcome::Done(msg) => println!("==> {label}: {msg}"),
-            Outcome::Skipped(msg) => println!("==> {label} skipped: {msg}"),
+            // Multi-line Skipped: first line goes after the `==>` header,
+            // subsequent lines indent under it. Keeps backwards-compat with
+            // existing single-line skips while letting register_codex /
+            // friends append a paste-ready manual-fallback hint.
+            Outcome::Skipped(msg) => {
+                let mut lines = msg.lines();
+                if let Some(first) = lines.next() {
+                    println!("==> {label} skipped: {first}");
+                    for line in lines {
+                        println!("    {line}");
+                    }
+                }
+            }
             Outcome::Failed(msg) => {
                 eprintln!("warning: {label} failed: {msg}");
                 failure_msgs.push(format!("{label}: {msg}"));
@@ -309,10 +321,31 @@ fn register_claude(bin: &Path, scope: ClaudeScope) -> Outcome {
 }
 
 fn register_codex(bin: &Path) -> Outcome {
-    if which::which("codex").is_err() {
-        return Outcome::Skipped("codex not found, skipping".into());
+    if which::which("codex").is_ok() {
+        return register_codex_via_cli(bin);
     }
+    // CLI not on PATH — fall back to desktop-app detection. All Codex
+    // surfaces (CLI, VS Code extension, Mac/desktop app) read the same
+    // `~/.codex/config.toml`, so a user with only the desktop app can
+    // still wire up MCP — they just have to edit the TOML themselves.
+    if detect_codex_app() {
+        return codex_manual_install_outcome(bin);
+    }
+    // No CLI, no detectable desktop app. PATH detection in non-interactive
+    // shells (`curl | sh` from a GUI terminal, sudo, etc.) misses CLIs that
+    // a login shell would resolve, so we hand the user the exact register
+    // command — they can run it from whichever shell sees `codex`.
+    Outcome::Skipped(format!(
+        "codex not found.\n\
+         If Codex is actually installed, register manually from a shell where \
+         `codex` is on PATH:\n\
+         \n\
+        \x20   codex mcp add {SERVER_NAME} -- {}",
+        bin.display()
+    ))
+}
 
+fn register_codex_via_cli(bin: &Path) -> Outcome {
     let bin_str = bin.to_string_lossy().to_string();
 
     // `codex mcp remove` exits 0 whether the entry existed or not (verified
@@ -324,6 +357,63 @@ fn register_codex(bin: &Path) -> Outcome {
     match run_cmd("codex", &["mcp", "add", SERVER_NAME, "--", &bin_str]) {
         Ok(_) => Outcome::Done("registered with Codex".into()),
         Err(e) => Outcome::Failed(format!("codex add: {e}")),
+    }
+}
+
+/// Detect a Codex desktop app installation. Codex CLI (`which codex`) is
+/// the primary signal; this is the secondary signal for users who only
+/// installed the Mac/desktop app — the app reads the same
+/// `~/.codex/config.toml` the CLI manages, so we can guide them to it.
+///
+/// Currently macOS-only because that's where the Mac app's canonical
+/// install path is well-known. Linux/Windows desktop builds exist but
+/// install paths vary across packagers; for those, the CLI path remains
+/// the supported route.
+fn detect_codex_app() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if Path::new("/Applications/Codex.app").exists() {
+            return true;
+        }
+        if let Some(home) = dirs::home_dir() {
+            if home.join("Applications/Codex.app").exists() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Build a paste-ready snippet for `~/.codex/config.toml`. Uses TOML
+/// literal strings (`'...'`) so backslashes and double quotes in the path
+/// pass through unchanged — important for Windows-form paths even though
+/// the desktop-app fallback is currently macOS-only (future-proofing).
+/// Falls back to a basic string with proper escaping if the path itself
+/// contains a single quote (TOML literal strings can't escape `'`).
+fn codex_toml_snippet(bin: &Path) -> String {
+    let path_str = bin.to_string_lossy();
+    if path_str.contains('\'') {
+        let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("[mcp_servers.{SERVER_NAME}]\ncommand = \"{escaped}\"\n")
+    } else {
+        format!("[mcp_servers.{SERVER_NAME}]\ncommand = '{path_str}'\n")
+    }
+}
+
+fn codex_manual_install_outcome(bin: &Path) -> Outcome {
+    let snippet = codex_toml_snippet(bin);
+    let body = format!(
+        "Codex CLI not on PATH but desktop app detected. All Codex \
+         surfaces share `~/.codex/config.toml`; add this and restart the \
+         Codex app:\n\
+         \n\
+         {snippet}\n\
+         (Create `~/.codex/config.toml` if it doesn't exist. \
+         Reference: https://developers.openai.com/codex/config-reference)"
+    );
+    Outcome::Manual {
+        headline: "desktop app detected, CLI missing — needs one-time manual setup".into(),
+        body,
     }
 }
 
@@ -399,15 +489,32 @@ fn claude_remove_error_is_not_found(err: &str) -> bool {
 }
 
 fn deregister_codex() -> Outcome {
-    if which::which("codex").is_err() {
-        return Outcome::Skipped("codex not found, skipping".into());
+    if which::which("codex").is_ok() {
+        // `codex mcp remove` exits 0 whether the entry existed or not
+        // (empirically verified). A non-zero exit IS a real failure —
+        // don't downgrade it.
+        return match run_cmd("codex", &["mcp", "remove", SERVER_NAME]) {
+            Ok(_) => Outcome::Done("deregistered from Codex".into()),
+            Err(e) => Outcome::Failed(format!("codex remove: {e}")),
+        };
     }
-    // `codex mcp remove` exits 0 whether the entry existed or not (empirically
-    // verified). A non-zero exit IS a real failure — don't downgrade it.
-    match run_cmd("codex", &["mcp", "remove", SERVER_NAME]) {
-        Ok(_) => Outcome::Done("deregistered from Codex".into()),
-        Err(e) => Outcome::Failed(format!("codex remove: {e}")),
+    if detect_codex_app() {
+        return Outcome::Manual {
+            headline: "desktop app detected, CLI missing — needs manual cleanup".into(),
+            body: format!(
+                "Open `~/.codex/config.toml` and remove the \
+                 `[mcp_servers.{SERVER_NAME}]` table, then restart the \
+                 Codex app. (The binary and cache will still be removed below.)"
+            ),
+        };
     }
+    Outcome::Skipped(format!(
+        "codex not found.\n\
+         If Codex is actually installed, deregister manually from a shell where \
+         `codex` is on PATH:\n\
+         \n\
+        \x20   codex mcp remove {SERVER_NAME}"
+    ))
 }
 
 /// Detect a Qoder installation. Qoder is an Electron-based AI IDE; it
@@ -640,6 +747,38 @@ mod tests {
         ));
         assert!(!claude_remove_error_is_not_found("segmentation fault"));
         assert!(!claude_remove_error_is_not_found(""));
+    }
+
+    #[test]
+    fn codex_toml_snippet_uses_literal_string_for_simple_path() {
+        let bin = PathBuf::from("/Users/jhon.lgh/.local/bin/perfetto-mcp-rs");
+        let s = codex_toml_snippet(&bin);
+        assert!(s.contains(&format!("[mcp_servers.{SERVER_NAME}]")));
+        // Literal-string form (single-quoted) — no escape processing.
+        assert!(s.contains("command = '/Users/jhon.lgh/.local/bin/perfetto-mcp-rs'"));
+    }
+
+    #[test]
+    fn codex_toml_snippet_passes_windows_backslashes_through_literal_string() {
+        // TOML literal strings don't process escapes, so backslashes
+        // appear as-is. This is the correct on-disk form for Windows
+        // paths if/when the desktop-app fallback expands beyond macOS.
+        let bin = PathBuf::from(r"C:\Users\me\.local\bin\perfetto-mcp-rs.exe");
+        let s = codex_toml_snippet(&bin);
+        assert!(s.contains(r"command = 'C:\Users\me\.local\bin\perfetto-mcp-rs.exe'"));
+        // Belt-and-braces: must NOT have doubled backslashes (that's basic-
+        // string escaping, wrong for literal strings).
+        assert!(!s.contains(r"\\Users"));
+    }
+
+    #[test]
+    fn codex_toml_snippet_falls_back_to_basic_string_when_path_has_quote() {
+        // Single quote in path forces basic-string form with escaping —
+        // TOML literal strings have no way to escape `'`.
+        let bin = PathBuf::from("/tmp/it's-a-path/perfetto-mcp-rs");
+        let s = codex_toml_snippet(&bin);
+        // Basic string: double-quoted, no escapes needed for single quote.
+        assert!(s.contains(r#"command = "/tmp/it's-a-path/perfetto-mcp-rs""#));
     }
 
     #[test]
