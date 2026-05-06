@@ -579,9 +579,10 @@ fn claude_manual_uninstall_body(
 ) -> String {
     let mut body = String::from(
         "Claude CLI not on PATH. Cleanup steps for whichever Claude \
-         products you have (binary will be kept until cleanup is \
-         confirmed; re-run uninstall with `--skip-claude` after manual \
-         cleanup, or once Claude is gone):\n\n",
+         products you have. The binary will be kept until cleanup is \
+         confirmed — after the steps below, finish uninstall with \
+         `SKIP_CLAUDE=1` (env var on the wrapper) or `--skip-claude` \
+         (on direct binary invocation):\n\n",
     );
     if has_desktop {
         let cfg_path = claude_desktop_config_path_display();
@@ -703,8 +704,9 @@ fn deregister_codex() -> Outcome {
             body: format!(
                 "Open `~/.codex/config.toml` and remove the \
                  `[mcp_servers.{SERVER_NAME}]` table, then restart Codex. \
-                 The binary will be kept until you re-run uninstall (with \
-                 `--skip-codex` after manual cleanup, or once Codex is gone)."
+                 The binary will be kept until cleanup is confirmed — \
+                 finish uninstall with `SKIP_CODEX=1` (env var on the \
+                 wrapper) or `--skip-codex` (on direct binary invocation)."
             ),
             blocking: true,
         };
@@ -780,8 +782,9 @@ fn deregister_qoder() -> Outcome {
         headline: "detected — needs manual cleanup".into(),
         body: format!(
             "Open Qoder Settings → MCP and remove the `{SERVER_NAME}` entry. \
-             The binary will be kept until you re-run uninstall (with \
-             `--skip-qoder` after manual cleanup, or once Qoder is gone)."
+             The binary will be kept until cleanup is confirmed — finish \
+             uninstall with `SKIP_QODER=1` (env var on the wrapper) or \
+             `--skip-qoder` (on direct binary invocation)."
         ),
         blocking: true,
     }

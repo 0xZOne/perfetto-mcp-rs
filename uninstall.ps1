@@ -8,6 +8,14 @@
 #   $env:SCOPE         Claude scope at install time: user|local|project
 #                      (default: user). For local/project, run from the
 #                      original project directory.
+#   $env:SKIP_CLAUDE   Set to any value to pass --skip-claude.
+#   $env:SKIP_CODEX    Set to any value to pass --skip-codex.
+#   $env:SKIP_QODER    Set to any value to pass --skip-qoder.
+#                      Use after manually cleaning an entry the binary
+#                      couldn't touch (Claude Desktop / Codex no-CLI /
+#                      Qoder) — otherwise the binary keeps blocking
+#                      because the *client* is still installed even
+#                      though the MCP entry is gone.
 #
 # The binary's `uninstall` subcommand (v0.8+) owns deregistration + cache
 # cleanup. This wrapper only handles:
@@ -67,20 +75,28 @@ function Uninstall-PerfettoMcp {
 
         if ($helpExit -eq 0) {
             if ($helpOutput -match '(?m)^\s+uninstall\b') {
+                # SKIP_* env vars translate to --skip-* flags. PowerShell
+                # splat the array via @skipArgs.
+                $skipArgs = @()
+                if ($env:SKIP_CLAUDE) { $skipArgs += '--skip-claude' }
+                if ($env:SKIP_CODEX)  { $skipArgs += '--skip-codex' }
+                if ($env:SKIP_QODER)  { $skipArgs += '--skip-qoder' }
+
                 # Don't `| Out-Null` here — the binary prints step-by-step
                 # outcomes (`==> Claude: deregistered...` etc.) on stdout,
                 # and we want them on the user's console. _invokeNative
                 # only captures $LASTEXITCODE via the EAP dance; its
                 # return value is the passthrough stdout stream.
-                _invokeNative { & $dest uninstall --scope $scope }
+                _invokeNative { & $dest uninstall --scope $scope @skipArgs }
                 $uninstallExit = $LASTEXITCODE
 
                 if ($uninstallExit -eq 0) {
                     $removable = $true
                 } else {
                     _warn "binary uninstall failed under --scope $scope; **keeping binary in place**"
-                    _warn "for retry. Common causes: locked cache, or --scope local/project run"
-                    _warn "from the wrong directory. Fix the issue and re-run uninstall.ps1."
+                    _warn "for retry. Common causes: a still-installed client (re-run with"
+                    _warn "`$env:SKIP_CLAUDE='1' / SKIP_CODEX='1' / SKIP_QODER='1' after manual cleanup),"
+                    _warn "locked cache, or --scope local/project run from the wrong directory."
                 }
             } else {
                 # v0.7 install.ps1 only ever registered --scope user (no scope

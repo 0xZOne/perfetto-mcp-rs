@@ -9,6 +9,14 @@
 #   SCOPE         Claude scope at install time: user|local|project (default:
 #                 user). For local/project, run this script from the original
 #                 project directory so the scoped entry is reachable.
+#   SKIP_CLAUDE   Set to any value to pass --skip-claude to the binary.
+#   SKIP_CODEX    Set to any value to pass --skip-codex.
+#   SKIP_QODER    Set to any value to pass --skip-qoder.
+#                 Use these after you've manually cleaned up an entry the
+#                 binary couldn't touch (Claude Desktop / Codex no-CLI /
+#                 Qoder) — otherwise the binary will keep blocking
+#                 because the *client* is still installed even though the
+#                 MCP entry is gone.
 #
 # The binary's `uninstall` subcommand (v0.8+) owns deregistration + cache
 # cleanup. This wrapper only handles:
@@ -67,12 +75,20 @@ main() {
 
     if [ "$help_status" -eq 0 ]; then
       if printf '%s\n' "$help_output" | grep -qE '^[[:space:]]+uninstall([[:space:]]|$)'; then
-        if "${INSTALL_DIR}/${bin_file}" uninstall --scope "$SCOPE"; then
+        # SKIP_* env vars translate to --skip-* flags. Unquoted expansion
+        # is intentional — POSIX sh has no arrays, and the values here
+        # never contain whitespace. Empty when no skip env vars are set.
+        skip_args=""
+        [ "${SKIP_CLAUDE:-}" ] && skip_args="${skip_args} --skip-claude"
+        [ "${SKIP_CODEX:-}" ]  && skip_args="${skip_args} --skip-codex"
+        [ "${SKIP_QODER:-}" ]  && skip_args="${skip_args} --skip-qoder"
+        if "${INSTALL_DIR}/${bin_file}" uninstall --scope "$SCOPE" $skip_args; then
           removable=yes
         else
           warn "binary uninstall failed under --scope ${SCOPE}; **keeping binary in place**"
-          warn "for retry. Common causes: locked cache dir, or --scope local/project run"
-          warn "from the wrong directory. Fix the issue and re-run uninstall.sh."
+          warn "for retry. Common causes: a still-installed client (re-run with"
+          warn "SKIP_CLAUDE=1 / SKIP_CODEX=1 / SKIP_QODER=1 after manual cleanup),"
+          warn "locked cache dir, or --scope local/project run from the wrong directory."
           # removable stays no
         fi
       else
