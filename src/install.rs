@@ -289,24 +289,28 @@ fn register_claude(bin: &Path, scope: ClaudeScope) -> Outcome {
     if which::which("claude").is_ok() {
         return register_claude_via_cli(bin, scope);
     }
-    // CLI not on PATH. Two independent products may still be present:
-    // Claude Desktop (its own JSON config) and Claude Code (CLI installed
-    // but PATH-hidden — the `curl|sh` subshell case). Detect both
-    // independently and surface separate hints; quiet-skip only if neither
-    // signals.
-    //
-    // Claude Desktop fallback is gated to scope=User: Local/Project are
-    // Claude Code-only concepts without a Desktop analog, so silently
-    // rerouting to Desktop's single global config would violate intent.
-    let has_desktop = scope == ClaudeScope::User && detect_claude_desktop();
-    let has_cli_config = claude_code_present_indirectly();
-    if !has_desktop && !has_cli_config {
+    let Some((has_desktop, has_cli_config)) = detect_claude_products(scope) else {
         return Outcome::Skipped("claude not installed".into());
-    }
+    };
     Outcome::Manual {
         headline: "detected — needs one-time manual setup (CLI not on PATH)".into(),
         body: claude_manual_install_body(bin, scope, has_desktop, has_cli_config),
     }
+}
+
+/// Detect Claude products visible without the CLI on PATH and return
+/// `(has_desktop, has_cli_config)`, or `None` if neither signals — caller
+/// should emit a quiet Skipped.
+///
+/// Claude Desktop fallback is gated to `scope=User`: Local/Project are
+/// Claude Code-only concepts without a Desktop analog, so silently
+/// rerouting to Desktop's single global config would violate the user's
+/// intent. The CLI-config branch is scope-agnostic — its hint just echoes
+/// whatever scope was requested.
+fn detect_claude_products(scope: ClaudeScope) -> Option<(bool, bool)> {
+    let has_desktop = scope == ClaudeScope::User && detect_claude_desktop();
+    let has_cli_config = claude_code_present_indirectly();
+    (has_desktop || has_cli_config).then_some((has_desktop, has_cli_config))
 }
 
 fn register_claude_via_cli(bin: &Path, scope: ClaudeScope) -> Outcome {
@@ -372,28 +376,29 @@ fn register_codex_via_cli(bin: &Path) -> Outcome {
     }
 }
 
-/// Detect a Codex desktop app installation. Codex CLI (`which codex`) is
-/// the primary signal; this is the secondary signal for users who only
-/// installed the Mac/desktop app — the app reads the same
-/// `~/.codex/config.toml` the CLI manages, so we can guide them to it.
-///
-/// Currently macOS-only because that's where the Mac app's canonical
-/// install path is well-known. Linux/Windows desktop builds exist but
-/// install paths vary across packagers; for those, the CLI path remains
-/// the supported route.
-fn detect_codex_app() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        if Path::new("/Applications/Codex.app").exists() {
-            return true;
-        }
-        if let Some(home) = dirs::home_dir() {
-            if home.join("Applications/Codex.app").exists() {
-                return true;
-            }
-        }
+/// Probe `/Applications/<name>` and `~/Applications/<name>` for a macOS
+/// `.app` bundle. Returns false on non-macOS so callers don't need cfg
+/// guards. Used by detection probes for Codex / Claude Desktop / Qoder —
+/// all three follow the same Mac install convention.
+#[cfg(target_os = "macos")]
+fn macos_app_bundle_present(name: &str) -> bool {
+    if Path::new("/Applications").join(name).exists() {
+        return true;
     }
+    dirs::home_dir().is_some_and(|h| h.join("Applications").join(name).exists())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_app_bundle_present(_name: &str) -> bool {
     false
+}
+
+/// Detect a Codex desktop app installation. Currently macOS-only because
+/// that's where the Mac app's canonical install path is well-known;
+/// Linux/Windows desktop builds exist but install paths vary across
+/// packagers, so for those the CLI path remains the supported route.
+fn detect_codex_app() -> bool {
+    macos_app_bundle_present("Codex.app")
 }
 
 /// "Is Codex installed?" probe for the no-CLI path. Returns true if we have
@@ -455,23 +460,10 @@ fn codex_manual_install_outcome(bin: &Path) -> Outcome {
 /// data dir; the data dir is created the first time Claude Desktop runs,
 /// regardless of platform, making it the most portable signal.
 fn detect_claude_desktop() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        if Path::new("/Applications/Claude.app").exists() {
-            return true;
-        }
-        if let Some(home) = dirs::home_dir() {
-            if home.join("Applications/Claude.app").exists() {
-                return true;
-            }
-        }
+    if macos_app_bundle_present("Claude.app") {
+        return true;
     }
-    if let Some(p) = claude_desktop_config_dir() {
-        if p.exists() {
-            return true;
-        }
-    }
-    false
+    claude_desktop_config_dir().is_some_and(|p| p.exists())
 }
 
 /// Per-platform Claude Desktop data dir (the parent of
@@ -485,6 +477,15 @@ fn claude_desktop_config_dir() -> Option<PathBuf> {
 
 fn claude_desktop_config_path() -> Option<PathBuf> {
     claude_desktop_config_dir().map(|d| d.join("claude_desktop_config.json"))
+}
+
+/// Display form of the Claude Desktop config path for hint messages.
+/// Falls back to the bare filename when `dirs::config_dir()` returns None
+/// (extremely rare — only headless / chrooted environments).
+fn claude_desktop_config_path_display() -> String {
+    claude_desktop_config_path()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "claude_desktop_config.json".into())
 }
 
 /// "Is Claude Code (CLI) installed?" probe for the no-PATH path.
@@ -521,9 +522,7 @@ fn claude_manual_install_body(
     );
     if has_desktop {
         let snippet = mcp_servers_json_snippet(bin);
-        let cfg_path = claude_desktop_config_path()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "claude_desktop_config.json".into());
+        let cfg_path = claude_desktop_config_path_display();
         body.push_str(&format!(
             "Claude Desktop:\n\
              Add this to {cfg_path} (create it if missing), then restart \
@@ -536,11 +535,12 @@ fn claude_manual_install_body(
         }
     }
     if has_cli_config {
-        body.push_str(&format!(
+        body.push_str(
             "Claude Code (CLI):\n\
-             From a shell where `claude` is on PATH, run:\n\
-             \n\
-            \x20   claude mcp add {SERVER_NAME} --scope {scope} -- {}",
+             From a shell where `claude` is on PATH, run:\n\n",
+        );
+        body.push_str(&format!(
+            "    claude mcp add {SERVER_NAME} --scope {scope} -- {}",
             bin.display()
         ));
     }
@@ -558,9 +558,7 @@ fn claude_manual_uninstall_body(
          products you have:\n\n",
     );
     if has_desktop {
-        let cfg_path = claude_desktop_config_path()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "claude_desktop_config.json".into());
+        let cfg_path = claude_desktop_config_path_display();
         body.push_str(&format!(
             "Claude Desktop:\n\
              Open {cfg_path} and remove the `{SERVER_NAME}` entry under \
@@ -571,11 +569,12 @@ fn claude_manual_uninstall_body(
         }
     }
     if has_cli_config {
-        body.push_str(&format!(
+        body.push_str(
             "Claude Code (CLI):\n\
-             From a shell where `claude` is on PATH, run:\n\
-             \n\
-            \x20   claude mcp remove {SERVER_NAME} --scope {scope}"
+             From a shell where `claude` is on PATH, run:\n\n",
+        );
+        body.push_str(&format!(
+            "    claude mcp remove {SERVER_NAME} --scope {scope}"
         ));
     }
     body
@@ -585,11 +584,9 @@ fn deregister_claude(scope: ClaudeScope) -> Outcome {
     if which::which("claude").is_ok() {
         return deregister_claude_via_cli(scope);
     }
-    let has_desktop = scope == ClaudeScope::User && detect_claude_desktop();
-    let has_cli_config = claude_code_present_indirectly();
-    if !has_desktop && !has_cli_config {
+    let Some((has_desktop, has_cli_config)) = detect_claude_products(scope) else {
         return Outcome::Skipped("claude not installed".into());
-    }
+    };
     Outcome::Manual {
         headline: "detected — needs manual cleanup (CLI not on PATH)".into(),
         body: claude_manual_uninstall_body(scope, has_desktop, has_cli_config),
@@ -694,16 +691,8 @@ fn detect_qoder() -> bool {
     if which::which("qoder").is_ok() {
         return true;
     }
-    #[cfg(target_os = "macos")]
-    {
-        if Path::new("/Applications/Qoder.app").exists() {
-            return true;
-        }
-        if let Some(home) = dirs::home_dir() {
-            if home.join("Applications/Qoder.app").exists() {
-                return true;
-            }
-        }
+    if macos_app_bundle_present("Qoder.app") {
+        return true;
     }
     #[cfg(windows)]
     {
@@ -730,8 +719,6 @@ fn mcp_servers_json_snippet(bin: &Path) -> String {
             }
         }
     });
-    // Pretty-print is the readable form both clients accept; serde_json
-    // never fails on a value built from owned data, so unwrap is sound.
     serde_json::to_string_pretty(&value)
         .expect("serde_json::to_string_pretty cannot fail on owned Value")
 }
