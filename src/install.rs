@@ -778,15 +778,24 @@ fn deregister_qoder() -> Outcome {
     if !detect_qoder() {
         return Outcome::Skipped("Qoder not found, skipping".into());
     }
+    // Non-blocking by design. Codex / Claude Desktop block uninstall when
+    // we know their config files live at well-known paths and can verify
+    // a dangling MCP entry would be left behind. Qoder's config path is a
+    // black box (UI-only management; no documented disk location), so we
+    // can never verify cleanup happened. Blocking would just trap the
+    // user — they'd have to pass SKIP_QODER every uninstall forever.
+    // Print the heads-up and proceed; if the user forgets, Qoder will
+    // surface the dangling entry on next launch and they can remove it
+    // then.
     Outcome::Manual {
-        headline: "detected — needs manual cleanup".into(),
+        headline: "detected — manual cleanup is your responsibility".into(),
         body: format!(
-            "Open Qoder Settings → MCP and remove the `{SERVER_NAME}` entry. \
-             The binary will be kept until cleanup is confirmed — finish \
-             uninstall with `SKIP_QODER=1` (env var on the wrapper) or \
-             `--skip-qoder` (on direct binary invocation)."
+            "Qoder has no programmatic API for MCP servers and its config \
+             file path isn't documented, so perfetto-mcp-rs can't verify \
+             cleanup. Open Qoder Settings → MCP and remove the \
+             `{SERVER_NAME}` entry. (Uninstall will proceed regardless.)"
         ),
-        blocking: true,
+        blocking: false,
     }
 }
 

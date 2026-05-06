@@ -11,12 +11,12 @@
 #                 project directory so the scoped entry is reachable.
 #   SKIP_CLAUDE   Set to any value to pass --skip-claude to the binary.
 #   SKIP_CODEX    Set to any value to pass --skip-codex.
-#   SKIP_QODER    Set to any value to pass --skip-qoder.
 #                 Use these after you've manually cleaned up an entry the
-#                 binary couldn't touch (Claude Desktop / Codex no-CLI /
-#                 Qoder) — otherwise the binary will keep blocking
-#                 because the *client* is still installed even though the
-#                 MCP entry is gone.
+#                 binary couldn't touch (Claude Desktop / Codex no-CLI) —
+#                 otherwise the binary will keep blocking because the
+#                 *client* is still installed even though the MCP entry
+#                 is gone. (Qoder is informational-only on uninstall —
+#                 no SKIP_QODER passthrough needed.)
 #
 # The binary's `uninstall` subcommand (v0.8+) owns deregistration + cache
 # cleanup. This wrapper only handles:
@@ -81,14 +81,13 @@ main() {
         skip_args=""
         [ "${SKIP_CLAUDE:-}" ] && skip_args="${skip_args} --skip-claude"
         [ "${SKIP_CODEX:-}" ]  && skip_args="${skip_args} --skip-codex"
-        [ "${SKIP_QODER:-}" ]  && skip_args="${skip_args} --skip-qoder"
         if "${INSTALL_DIR}/${bin_file}" uninstall --scope "$SCOPE" $skip_args; then
           removable=yes
         else
           warn "binary uninstall failed under --scope ${SCOPE}; **keeping binary in place**"
           warn "for retry. Common causes: a still-installed client (re-run with"
-          warn "SKIP_CLAUDE=1 / SKIP_CODEX=1 / SKIP_QODER=1 after manual cleanup),"
-          warn "locked cache dir, or --scope local/project run from the wrong directory."
+          warn "SKIP_CLAUDE=1 / SKIP_CODEX=1 after manual cleanup), locked cache,"
+          warn "or --scope local/project run from the wrong directory."
           # removable stays no
         fi
       else

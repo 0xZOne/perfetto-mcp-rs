@@ -10,12 +10,12 @@
 #                      original project directory.
 #   $env:SKIP_CLAUDE   Set to any value to pass --skip-claude.
 #   $env:SKIP_CODEX    Set to any value to pass --skip-codex.
-#   $env:SKIP_QODER    Set to any value to pass --skip-qoder.
 #                      Use after manually cleaning an entry the binary
-#                      couldn't touch (Claude Desktop / Codex no-CLI /
-#                      Qoder) — otherwise the binary keeps blocking
-#                      because the *client* is still installed even
-#                      though the MCP entry is gone.
+#                      couldn't touch (Claude Desktop / Codex no-CLI) —
+#                      otherwise the binary keeps blocking because the
+#                      *client* is still installed even though the MCP
+#                      entry is gone. (Qoder is informational-only on
+#                      uninstall — no SKIP_QODER passthrough needed.)
 #
 # The binary's `uninstall` subcommand (v0.8+) owns deregistration + cache
 # cleanup. This wrapper only handles:
@@ -80,7 +80,6 @@ function Uninstall-PerfettoMcp {
                 $skipArgs = @()
                 if ($env:SKIP_CLAUDE) { $skipArgs += '--skip-claude' }
                 if ($env:SKIP_CODEX)  { $skipArgs += '--skip-codex' }
-                if ($env:SKIP_QODER)  { $skipArgs += '--skip-qoder' }
 
                 # Don't `| Out-Null` here — the binary prints step-by-step
                 # outcomes (`==> Claude: deregistered...` etc.) on stdout,
@@ -95,7 +94,7 @@ function Uninstall-PerfettoMcp {
                 } else {
                     _warn "binary uninstall failed under --scope $scope; **keeping binary in place**"
                     _warn "for retry. Common causes: a still-installed client (re-run with"
-                    _warn "`$env:SKIP_CLAUDE='1' / SKIP_CODEX='1' / SKIP_QODER='1' after manual cleanup),"
+                    _warn "`$env:SKIP_CLAUDE='1' / SKIP_CODEX='1' after manual cleanup),"
                     _warn "locked cache, or --scope local/project run from the wrong directory."
                 }
             } else {
