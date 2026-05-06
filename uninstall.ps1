@@ -92,10 +92,9 @@ function Uninstall-PerfettoMcp {
                 if ($uninstallExit -eq 0) {
                     $removable = $true
                 } else {
-                    _warn "binary uninstall failed under --scope $scope; **keeping binary in place**"
-                    _warn "for retry. Common causes: a still-installed client (re-run with"
-                    _warn "`$env:SKIP_CLAUDE='1' / SKIP_CODEX='1' after manual cleanup),"
-                    _warn "locked cache, or --scope local/project run from the wrong directory."
+                    _warn "binary uninstall failed; **keeping binary in place** for retry."
+                    _warn "See output above for next steps. Other causes: locked cache,"
+                    _warn "or --scope local/project run from the wrong directory."
                 }
             } else {
                 # v0.7 install.ps1 only ever registered --scope user (no scope

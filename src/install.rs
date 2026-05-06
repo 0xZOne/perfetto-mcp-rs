@@ -778,15 +778,15 @@ fn deregister_qoder() -> Outcome {
     if !detect_qoder() {
         return Outcome::Skipped("Qoder not found, skipping".into());
     }
-    // Non-blocking by design. Codex / Claude Desktop block uninstall when
-    // we know their config files live at well-known paths and can verify
-    // a dangling MCP entry would be left behind. Qoder's config path is a
-    // black box (UI-only management; no documented disk location), so we
-    // can never verify cleanup happened. Blocking would just trap the
-    // user — they'd have to pass SKIP_QODER every uninstall forever.
-    // Print the heads-up and proceed; if the user forgets, Qoder will
-    // surface the dangling entry on next launch and they can remove it
-    // then.
+    // Non-blocking by design. Codex (`~/.codex/config.toml`) and Claude
+    // Desktop (per-OS well-known JSON path) document where their MCP
+    // config lives, so we can tell the user *which file to edit* and
+    // blocking the uninstall is a meaningful safety net — they have a
+    // concrete next action. Qoder's config path is undocumented (UI-only
+    // management), so the best we can offer is "open Settings → MCP";
+    // blocking would trap users who can't comply with anything more
+    // specific. If the user forgets, Qoder will surface the dangling
+    // entry on next launch and they can remove it then.
     Outcome::Manual {
         headline: "detected — manual cleanup is your responsibility".into(),
         body: format!(
@@ -1046,6 +1046,21 @@ mod tests {
             aggregate(outcomes).is_err(),
             "blocking Manual must propagate as failure so the wrapper keeps the binary"
         );
+    }
+
+    // Pins Qoder's documented asymmetry vs Codex/Claude Desktop: its
+    // config path is undocumented, so blocking the uninstall would trap
+    // users with no concrete file to edit. On test machines without
+    // Qoder this passes vacuously (Skipped); when Qoder IS detected the
+    // outcome MUST be a non-blocking Manual — never a blocking one.
+    #[test]
+    fn qoder_deregister_is_non_blocking_when_detected() {
+        if let Outcome::Manual { blocking, .. } = deregister_qoder() {
+            assert!(
+                !blocking,
+                "Qoder uninstall must be non-blocking — config path is undocumented"
+            );
+        }
     }
 
     #[test]

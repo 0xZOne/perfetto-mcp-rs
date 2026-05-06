@@ -84,9 +84,8 @@ main() {
         if "${INSTALL_DIR}/${bin_file}" uninstall --scope "$SCOPE" $skip_args; then
           removable=yes
         else
-          warn "binary uninstall failed under --scope ${SCOPE}; **keeping binary in place**"
-          warn "for retry. Common causes: a still-installed client (re-run with"
-          warn "SKIP_CLAUDE=1 / SKIP_CODEX=1 after manual cleanup), locked cache,"
+          warn "binary uninstall failed; **keeping binary in place** for retry."
+          warn "See output above for next steps. Other causes: locked cache,"
           warn "or --scope local/project run from the wrong directory."
           # removable stays no
         fi
