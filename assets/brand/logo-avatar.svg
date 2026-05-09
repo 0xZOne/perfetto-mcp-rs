@@ -1,4 +1,4 @@
-<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+<svg width="512" height="512" viewBox="48 48 416 416" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">perfetto-mcp-rs avatar logo</title>
   <desc id="desc">A compact avatar logo combining Perfetto trace lanes with a clear MCP node connection motif.</desc>
   <defs>
@@ -24,7 +24,7 @@
     </linearGradient>
   </defs>
 
-  <rect x="48" y="48" width="416" height="416" rx="92" fill="url(#oiBg)"/>
+  <rect x="48" y="48" width="416" height="416" rx="0" fill="url(#oiBg)"/>
 
   <g transform="translate(0 10)">
     <path d="M118 146H318" stroke="#24384C" stroke-width="18" stroke-linecap="round"/>
