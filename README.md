@@ -2,13 +2,19 @@
   <img src="https://raw.githubusercontent.com/tooluse-labs/perfetto-mcp-rs/main/assets/brand/logo-wordmark.svg" width="820" alt="perfetto-mcp-rs logo">
 </p>
 
+<p align="center">
+  <a href="https://github.com/tooluse-labs/perfetto-mcp-rs/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/tooluse-labs/perfetto-mcp-rs/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/tooluse-labs/perfetto-mcp-rs/releases"><img alt="Release" src="https://img.shields.io/github/v/release/tooluse-labs/perfetto-mcp-rs"></a>
+  <a href="https://github.com/tooluse-labs/perfetto-mcp-rs/blob/main/LICENSE-MIT"><img alt="License" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue"></a>
+</p>
+
+<p align="center">
+  <strong>English</strong> | <a href="https://github.com/tooluse-labs/perfetto-mcp-rs/blob/main/README.zh-CN.md">简体中文</a>
+</p>
+
+---
+
 # perfetto-mcp-rs
-
-[![CI](https://github.com/tooluse-labs/perfetto-mcp-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/tooluse-labs/perfetto-mcp-rs/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/tooluse-labs/perfetto-mcp-rs)](https://github.com/tooluse-labs/perfetto-mcp-rs/releases)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](https://github.com/tooluse-labs/perfetto-mcp-rs/blob/main/LICENSE-MIT)
-
-**English** | [简体中文](https://github.com/tooluse-labs/perfetto-mcp-rs/blob/main/README.zh-CN.md)
 
 An [MCP](https://modelcontextprotocol.io) server for analyzing
 [Perfetto](https://perfetto.dev) traces with LLMs. Point Claude Code (or any
