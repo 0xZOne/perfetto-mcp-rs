@@ -22,12 +22,9 @@
       <stop stop-color="#B9F5FF"/>
       <stop offset="1" stop-color="#75D2FF"/>
     </linearGradient>
-    <filter id="owShadow" x="0" y="0" width="980" height="260" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#07101A" flood-opacity="0.22"/>
-    </filter>
   </defs>
 
-  <g filter="url(#owShadow)">
+  <g>
     <rect x="18" y="22" width="944" height="216" rx="42" fill="url(#owPanel)"/>
 
     <svg x="54" y="42" width="184" height="176" viewBox="82 96 368 300" fill="none">
