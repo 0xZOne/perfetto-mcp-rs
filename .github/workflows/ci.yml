@@ -26,6 +26,8 @@ jobs:
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
 
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
@@ -47,6 +49,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
 
       # Intentionally NO actions/cache for trace_processor_shell. Every
       # matrix run downloads cold so atomic persist + sidecar write +

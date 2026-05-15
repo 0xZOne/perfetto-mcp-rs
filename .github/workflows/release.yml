@@ -60,6 +60,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          # Don't cache `~/.cargo/bin/`. Prefix-match restore + failed-build
+          # skip-save lets a corrupted `cargo` (e.g. accidentally pointing at
+          # rustup-init from a one-off runner-image quirk) survive forever:
+          # the bad cache fails the next build, which then doesn't save a
+          # replacement. v0.14.0 release was bitten by exactly this on
+          # darwin-arm64 (cache from 2026-04-29 kept failing every release
+          # build through 2026-05-15). 10-20s extra rustup install per run
+          # is cheap insurance vs that silent failure mode.
+          cache-bin: false
 
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
@@ -263,6 +272,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: publish-crate
+          cache-bin: false
 
       # Idempotency guard: tolerate re-tagging or any future "manual-publish-
       # then-tag" bootstrap path. Hits the public crates.io API anonymously
