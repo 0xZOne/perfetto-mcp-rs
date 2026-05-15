@@ -40,7 +40,7 @@ impl ServerHandler for PerfettoMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             server_info: rmcp::model::Implementation {
-                name: "perfetto-mcp-rs".into(),
+                name: "perfetto-rs".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 title: None,
                 description: Some("MCP server for Perfetto trace analysis".into()),

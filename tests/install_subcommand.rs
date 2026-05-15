@@ -174,10 +174,14 @@ fn install_from_clean_state_always_remove_then_add() {
     assert_eq!(
         h.recorded_calls(),
         vec![
+            // Best-effort one-time cleanup of the pre-v0.14 `perfetto-mcp-rs`
+            // registration. Recorded but classified silently in the binary.
             "claude|mcp remove perfetto-mcp-rs --scope user".to_string(),
-            format!("claude|mcp add perfetto-mcp-rs --scope user -- {bin}"),
+            "claude|mcp remove perfetto-rs --scope user".to_string(),
+            format!("claude|mcp add perfetto-rs --scope user -- {bin}"),
             "codex|mcp remove perfetto-mcp-rs".to_string(),
-            format!("codex|mcp add perfetto-mcp-rs -- {bin}"),
+            "codex|mcp remove perfetto-rs".to_string(),
+            format!("codex|mcp add perfetto-rs -- {bin}"),
         ],
         "no mcp list should appear in the call sequence",
     );
@@ -201,10 +205,72 @@ fn install_with_existing_entry_removes_then_adds() {
         h.recorded_calls(),
         vec![
             "claude|mcp remove perfetto-mcp-rs --scope user".to_string(),
-            format!("claude|mcp add perfetto-mcp-rs --scope user -- {bin}"),
+            "claude|mcp remove perfetto-rs --scope user".to_string(),
+            format!("claude|mcp add perfetto-rs --scope user -- {bin}"),
             "codex|mcp remove perfetto-mcp-rs".to_string(),
-            format!("codex|mcp add perfetto-mcp-rs -- {bin}"),
+            "codex|mcp remove perfetto-rs".to_string(),
+            format!("codex|mcp add perfetto-rs -- {bin}"),
         ],
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Migration regression lock: both install and uninstall must attempt a
+// best-effort `mcp remove perfetto-mcp-rs` (the pre-v0.14 SERVER_NAME)
+// before touching the new-name registration, so users upgrading across the
+// rename don't end up with a stale `perfetto-mcp-rs` orphan in their
+// Claude / Codex config. Removing this once-per-CLI legacy-remove call
+// would silently reintroduce the orphan-on-upgrade bug, so we pin both the
+// presence and the ordering relative to the new-name remove. Drop the
+// legacy const + these assertions only after the migration window closes.
+// ---------------------------------------------------------------------------
+#[test]
+fn install_cleans_legacy_perfetto_mcp_rs_registration_before_new_name() {
+    let h = Harness::new();
+    let bin = h.fake_binary_path();
+    let out = h.run(&["install", "--scope", "user", "--binary-path", &bin]);
+    assert_success(&out, "install should succeed");
+    let calls = h.recorded_calls();
+    assert_legacy_remove_precedes_new_name_remove(&calls, "user");
+}
+
+#[test]
+fn uninstall_cleans_legacy_perfetto_mcp_rs_registration_before_new_name() {
+    let h = Harness::new();
+    fs::write(h.state_dir.join("claude.registered"), "seed\n").unwrap();
+    fs::write(h.state_dir.join("codex.registered"), "seed\n").unwrap();
+    let out = h.run(&["uninstall", "--scope", "user", "--keep-cache"]);
+    assert_success(&out, "uninstall should succeed on seeded state");
+    let calls = h.recorded_calls();
+    assert_legacy_remove_precedes_new_name_remove(&calls, "user");
+}
+
+fn assert_legacy_remove_precedes_new_name_remove(calls: &[String], scope: &str) {
+    let claude_legacy = format!("claude|mcp remove perfetto-mcp-rs --scope {scope}");
+    let claude_new = format!("claude|mcp remove perfetto-rs --scope {scope}");
+    let codex_legacy = "codex|mcp remove perfetto-mcp-rs";
+    let codex_new = "codex|mcp remove perfetto-rs";
+
+    let claude_legacy_pos = calls.iter().position(|c| c == &claude_legacy);
+    let claude_new_pos = calls.iter().position(|c| c == &claude_new);
+    assert!(
+        claude_legacy_pos.is_some(),
+        "legacy claude remove missing — migration cleanup regressed: {calls:?}"
+    );
+    assert!(
+        claude_legacy_pos < claude_new_pos,
+        "legacy claude remove must precede new-name remove: {calls:?}"
+    );
+
+    let codex_legacy_pos = calls.iter().position(|c| c == codex_legacy);
+    let codex_new_pos = calls.iter().position(|c| c == codex_new);
+    assert!(
+        codex_legacy_pos.is_some(),
+        "legacy codex remove missing — migration cleanup regressed: {calls:?}"
+    );
+    assert!(
+        codex_legacy_pos < codex_new_pos,
+        "legacy codex remove must precede new-name remove: {calls:?}"
     );
 }
 
@@ -251,7 +317,7 @@ fn install_fails_when_existing_user_scope_remove_fails() {
     assert!(
         calls
             .iter()
-            .any(|c| c == "claude|mcp remove perfetto-mcp-rs --scope user"),
+            .any(|c| c == "claude|mcp remove perfetto-rs --scope user"),
         "remove should have been attempted: {calls:?}"
     );
     assert!(
@@ -353,13 +419,11 @@ fn uninstall_removes_registrations_and_cache() {
     assert!(
         calls
             .iter()
-            .any(|c| c == "claude|mcp remove perfetto-mcp-rs --scope user"),
+            .any(|c| c == "claude|mcp remove perfetto-rs --scope user"),
         "claude remove missing: {calls:?}"
     );
     assert!(
-        calls
-            .iter()
-            .any(|c| c == "codex|mcp remove perfetto-mcp-rs"),
+        calls.iter().any(|c| c == "codex|mcp remove perfetto-rs"),
         "codex remove missing: {calls:?}"
     );
 
@@ -505,7 +569,7 @@ fn install_scope_local_real_remove_error_is_fatal_before_add() {
     assert!(
         calls
             .iter()
-            .any(|c| c == "claude|mcp remove perfetto-mcp-rs --scope local"),
+            .any(|c| c == "claude|mcp remove perfetto-rs --scope local"),
         "remove must have been attempted: {calls:?}"
     );
     assert!(
@@ -553,7 +617,7 @@ fn install_scope_local_not_found_remove_is_tolerated() {
             ("FAKE_CLAUDE_REMOVE_EXIT_CODE", "1"),
             (
                 "FAKE_CLAUDE_REMOVE_STDERR",
-                "No local-scoped MCP server found with name: perfetto-mcp-rs",
+                "No local-scoped MCP server found with name: perfetto-rs",
             ),
         ],
     );
@@ -565,7 +629,7 @@ fn install_scope_local_not_found_remove_is_tolerated() {
     assert!(
         calls
             .iter()
-            .any(|c| c.starts_with("claude|mcp add perfetto-mcp-rs --scope local ")),
+            .any(|c| c.starts_with("claude|mcp add perfetto-rs --scope local ")),
         "add must run after benign remove failure: {calls:?}"
     );
 }
@@ -595,7 +659,7 @@ fn uninstall_scope_local_not_found_is_fatal() {
             // Real Claude wording for an absent entry under a given scope.
             (
                 "FAKE_CLAUDE_REMOVE_STDERR",
-                "No local-scoped MCP server found with name: perfetto-mcp-rs",
+                "No local-scoped MCP server found with name: perfetto-rs",
             ),
         ],
     );
@@ -683,7 +747,7 @@ fn uninstall_scope_user_clean_state_is_skipped() {
             ("FAKE_CLAUDE_REMOVE_EXIT_CODE", "1"),
             (
                 "FAKE_CLAUDE_REMOVE_STDERR",
-                "No user-scoped MCP server found with name: perfetto-mcp-rs",
+                "No user-scoped MCP server found with name: perfetto-rs",
             ),
         ],
     );
@@ -694,14 +758,14 @@ fn uninstall_scope_user_clean_state_is_skipped() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        combined.contains("no user-scoped perfetto-mcp-rs registration to remove"),
+        combined.contains("no user-scoped perfetto-rs registration to remove"),
         "expected benign skip message for not-found: {combined}"
     );
     let calls = h.recorded_calls();
     assert!(
         calls
             .iter()
-            .any(|c| c == "claude|mcp remove perfetto-mcp-rs --scope user"),
+            .any(|c| c == "claude|mcp remove perfetto-rs --scope user"),
         "remove must be attempted (no probe path): {calls:?}"
     );
     assert!(
@@ -732,7 +796,7 @@ fn uninstall_mixed_corruption_and_not_found_is_fatal() {
                 "FAKE_CLAUDE_REMOVE_STDERR",
                 "Warning: ~/.claude.json was corrupted; backed up to \
                  ~/.claude.json.bak.\nNo local-scoped MCP server found with \
-                 name: perfetto-mcp-rs",
+                 name: perfetto-rs",
             ),
         ],
     );
@@ -778,7 +842,7 @@ fn install_scope_user_tolerates_visible_non_user_entry() {
             ("FAKE_CLAUDE_REMOVE_EXIT_CODE", "1"),
             (
                 "FAKE_CLAUDE_REMOVE_STDERR",
-                "No user-scoped MCP server found with name: perfetto-mcp-rs",
+                "No user-scoped MCP server found with name: perfetto-rs",
             ),
         ],
     );
@@ -791,7 +855,7 @@ fn install_scope_user_tolerates_visible_non_user_entry() {
     assert!(
         calls
             .iter()
-            .any(|c| c.starts_with("claude|mcp add perfetto-mcp-rs --scope user ")),
+            .any(|c| c.starts_with("claude|mcp add perfetto-rs --scope user ")),
         "add must still run after benign 'not found' remove: {calls:?}"
     );
 }
@@ -817,7 +881,7 @@ fn uninstall_scope_user_tolerates_not_found_from_non_user_entry() {
             ("FAKE_CLAUDE_REMOVE_EXIT_CODE", "1"),
             (
                 "FAKE_CLAUDE_REMOVE_STDERR",
-                "No user-scoped MCP server found with name: perfetto-mcp-rs",
+                "No user-scoped MCP server found with name: perfetto-rs",
             ),
         ],
     );
@@ -831,7 +895,7 @@ fn uninstall_scope_user_tolerates_not_found_from_non_user_entry() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        combined.contains("no user-scoped perfetto-mcp-rs registration to remove"),
+        combined.contains("no user-scoped perfetto-rs registration to remove"),
         "expected user-scope not-found message: {combined}"
     );
 }

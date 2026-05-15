@@ -222,7 +222,7 @@ ORDER BY n DESC;
 **Codex：**
 
 ```sh
-codex mcp add perfetto-mcp-rs -- /absolute/path/to/perfetto-mcp-rs
+codex mcp add perfetto-rs -- /absolute/path/to/perfetto-mcp-rs
 ```
 
 **基于 JSON 配置的客户端（比如 Claude Code、Claude Desktop、Cursor）：**
@@ -230,7 +230,7 @@ codex mcp add perfetto-mcp-rs -- /absolute/path/to/perfetto-mcp-rs
 ```json
 {
   "mcpServers": {
-    "perfetto-mcp-rs": {
+    "perfetto-rs": {
       "command": "/absolute/path/to/perfetto-mcp-rs"
     }
   }

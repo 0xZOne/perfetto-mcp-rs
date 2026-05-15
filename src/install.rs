@@ -19,7 +19,23 @@ use std::process::Command;
 
 use anyhow::{anyhow, Context, Result};
 
-const SERVER_NAME: &str = "perfetto-mcp-rs";
+const SERVER_NAME: &str = "perfetto-rs";
+
+/// Pre-rename SERVER_NAME (the crate-name-aligned value used before the
+/// `perfetto-mcp-rs` → `perfetto-rs` rename). Kept solely for a one-time
+/// orphan-cleanup pass inside register/deregister so users crossing the
+/// rename don't end up with a stale `perfetto-mcp-rs` entry pointing at a
+/// missing or re-pointed binary. Drop the const + its callsites + the
+/// pinned regression tests once cross-rename upgrades are no longer common
+/// in the wild.
+///
+/// Cleanup note for the future maintainer: not every legacy-name mention
+/// flows through this const. Manual-body copy in `claude_manual_*_body` and
+/// `codex_manual_*_body` hardcodes "perfetto-mcp-rs" as part of paste-ready
+/// hint text, and `tests/install_subcommand.rs` pins the recorded-call
+/// sequences with string literals. Grep the whole tree for `perfetto-mcp-rs`
+/// after deleting this const to catch those.
+const LEGACY_SERVER_NAME: &str = "perfetto-mcp-rs";
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClaudeScope {
@@ -354,6 +370,16 @@ fn register_claude_via_cli(bin: &Path, scope: ClaudeScope) -> Outcome {
     let bin_str = bin.to_string_lossy().to_string();
     let scope_str = scope.as_str();
 
+    // Best-effort cleanup of the pre-rename `perfetto-mcp-rs` orphan within
+    // the current scope. Failures are intentionally swallowed: a "not found"
+    // is the dominant case (fresh installs), and any genuine error
+    // (corrupt config, permissions) will be re-surfaced by the subsequent
+    // new-name remove below.
+    let _ = run_cmd(
+        "claude",
+        &["mcp", "remove", LEGACY_SERVER_NAME, "--scope", scope_str],
+    );
+
     // Idempotent remove-then-add. We used to pre-probe with `claude mcp
     // list` to decide whether to call `remove` at all — but `mcp list` is
     // **not a passive probe**: per Claude Code docs it skips the workspace-
@@ -416,6 +442,12 @@ fn register_codex(bin: &Path) -> Outcome {
 
 fn register_codex_via_cli(bin: &Path) -> Outcome {
     let bin_str = bin.to_string_lossy().to_string();
+
+    // Best-effort cleanup of the pre-rename `perfetto-mcp-rs` orphan. `codex
+    // mcp remove` exits 0 for missing entries, so this is silent on fresh
+    // installs; any real config error will be re-surfaced by the new-name
+    // remove that follows.
+    let _ = run_cmd("codex", &["mcp", "remove", LEGACY_SERVER_NAME]);
 
     // `codex mcp remove` exits 0 whether the entry existed or not (verified
     // empirically), so running it unconditionally is safe for idempotence.
@@ -491,22 +523,45 @@ fn codex_toml_snippet(bin: &Path) -> String {
     }
 }
 
-fn codex_manual_install_outcome(bin: &Path) -> Outcome {
+/// Build the install-side Manual body — symmetric to
+/// [`codex_manual_uninstall_body`]. Mentions the pre-rename
+/// `[mcp_servers.perfetto-mcp-rs]` table so a CLI-less upgrader knows to
+/// strip the old entry before pasting the new TOML block.
+fn codex_manual_install_body(bin: &Path) -> String {
     let snippet = codex_toml_snippet(bin);
-    let body = format!(
+    format!(
         "Codex CLI not on PATH. All Codex surfaces (CLI, Mac/desktop app, \
-         VS Code ext) read the same `~/.codex/config.toml`; add this and \
-         restart Codex:\n\
+         VS Code ext) read the same `~/.codex/config.toml`. If a pre-rename \
+         install left a `[mcp_servers.{LEGACY_SERVER_NAME}]` table, remove \
+         it. Then add this and restart Codex:\n\
          \n\
          {snippet}\n\
          (Create `~/.codex/config.toml` if it doesn't exist. \
          Reference: https://developers.openai.com/codex/config-reference)"
-    );
+    )
+}
+
+fn codex_manual_install_outcome(bin: &Path) -> Outcome {
     Outcome::Manual {
         headline: "detected — needs one-time manual setup (CLI not on PATH)".into(),
-        body,
+        body: codex_manual_install_body(bin),
         blocking: false,
     }
+}
+
+/// Build the uninstall-side Manual body — symmetric to install. Mentions the
+/// pre-rename `[mcp_servers.perfetto-mcp-rs]` table so a CLI-less upgrader
+/// can clean both entries in one config edit.
+fn codex_manual_uninstall_body() -> String {
+    format!(
+        "Open `~/.codex/config.toml` and remove the \
+         `[mcp_servers.{SERVER_NAME}]` table (also \
+         `[mcp_servers.{LEGACY_SERVER_NAME}]` if present from a \
+         pre-rename install), then restart Codex. The binary will \
+         be kept until cleanup is confirmed — finish uninstall \
+         with `SKIP_CODEX=1` (env var on the wrapper) or \
+         `--skip-codex` (on direct binary invocation)."
+    )
 }
 
 /// Detect Claude Desktop (Anthropic's GUI chat app — distinct from the
@@ -579,8 +634,10 @@ fn claude_manual_install_body(
         let cfg_path = claude_desktop_config_path_display();
         body.push_str(&format!(
             "Claude Desktop:\n\
-             Add this to {cfg_path} (create it if missing), then restart \
-             Claude Desktop:\n\
+             Edit {cfg_path} (create it if missing): remove any existing \
+             `{LEGACY_SERVER_NAME}` entry under `mcpServers` (left over from \
+             a pre-rename install), then add this block. Restart Claude \
+             Desktop:\n\
              \n\
              {snippet}\n"
         ));
@@ -591,8 +648,13 @@ fn claude_manual_install_body(
     if has_cli_config {
         body.push_str(
             "Claude Code (CLI):\n\
-             From a shell where `claude` is on PATH, run:\n\n",
+             From a shell where `claude` is on PATH, run (the first line \
+             clears a pre-rename entry if present; safe to ignore its \
+             output if you never installed the old version):\n\n",
         );
+        body.push_str(&format!(
+            "    claude mcp remove {LEGACY_SERVER_NAME} --scope {scope}\n"
+        ));
         body.push_str(&format!(
             "    claude mcp add {SERVER_NAME} --scope {scope} -- {}",
             bin.display()
@@ -619,7 +681,8 @@ fn claude_manual_uninstall_body(
         body.push_str(&format!(
             "Claude Desktop:\n\
              Open {cfg_path} and remove the `{SERVER_NAME}` entry under \
-             `mcpServers`, then restart Claude Desktop.\n"
+             `mcpServers` (also remove `{LEGACY_SERVER_NAME}` if present \
+             from a pre-rename install), then restart Claude Desktop.\n"
         ));
         if has_cli_config {
             body.push('\n');
@@ -628,10 +691,15 @@ fn claude_manual_uninstall_body(
     if has_cli_config {
         body.push_str(
             "Claude Code (CLI):\n\
-             From a shell where `claude` is on PATH, run:\n\n",
+             From a shell where `claude` is on PATH, run (the second line \
+             clears a pre-rename entry if present; safe to ignore its \
+             output otherwise):\n\n",
         );
         body.push_str(&format!(
-            "    claude mcp remove {SERVER_NAME} --scope {scope}"
+            "    claude mcp remove {SERVER_NAME} --scope {scope}\n"
+        ));
+        body.push_str(&format!(
+            "    claude mcp remove {LEGACY_SERVER_NAME} --scope {scope}"
         ));
     }
     body
@@ -652,6 +720,21 @@ fn deregister_claude(scope: ClaudeScope) -> Outcome {
 }
 
 fn deregister_claude_via_cli(scope: ClaudeScope) -> Outcome {
+    // Best-effort cleanup of the pre-rename `perfetto-mcp-rs` orphan within
+    // the current scope. Failures are intentionally swallowed: any real
+    // error will be re-surfaced by the new-name remove that follows, and
+    // a benign "not found" is the dominant case (fresh-install uninstalls).
+    let _ = run_cmd(
+        "claude",
+        &[
+            "mcp",
+            "remove",
+            LEGACY_SERVER_NAME,
+            "--scope",
+            scope.as_str(),
+        ],
+    );
+
     // No `mcp list` probe — list is not passive (it spawns visible stdio
     // servers for health checks). Attempt `remove` and classify the stderr.
     match run_cmd(
@@ -676,7 +759,7 @@ fn deregister_claude_via_cli(scope: ClaudeScope) -> Outcome {
         //   from the right directory (or confirm the entry was truly gone).
         Err(e) if claude_remove_error_is_not_found(&e) => match scope {
             ClaudeScope::User => {
-                Outcome::Skipped("no user-scoped perfetto-mcp-rs registration to remove".into())
+                Outcome::Skipped("no user-scoped perfetto-rs registration to remove".into())
             }
             ClaudeScope::Local | ClaudeScope::Project => Outcome::Failed(format!(
                 "scope={scope}: `claude mcp remove` reported no such entry here. Either the \
@@ -720,6 +803,10 @@ fn claude_remove_error_is_not_found(err: &str) -> bool {
 
 fn deregister_codex() -> Outcome {
     if which::which("codex").is_ok() {
+        // Best-effort cleanup of the pre-rename `perfetto-mcp-rs` orphan
+        // (silent on missing entries — codex exits 0).
+        let _ = run_cmd("codex", &["mcp", "remove", LEGACY_SERVER_NAME]);
+
         // `codex mcp remove` exits 0 whether the entry existed or not
         // (empirically verified). A non-zero exit IS a real failure —
         // don't downgrade it.
@@ -731,13 +818,7 @@ fn deregister_codex() -> Outcome {
     if codex_present_indirectly() {
         return Outcome::Manual {
             headline: "detected — needs manual cleanup (CLI not on PATH)".into(),
-            body: format!(
-                "Open `~/.codex/config.toml` and remove the \
-                 `[mcp_servers.{SERVER_NAME}]` table, then restart Codex. \
-                 The binary will be kept until cleanup is confirmed — \
-                 finish uninstall with `SKIP_CODEX=1` (env var on the \
-                 wrapper) or `--skip-codex` (on direct binary invocation)."
-            ),
+            body: codex_manual_uninstall_body(),
             blocking: true,
         };
     }
@@ -969,13 +1050,13 @@ mod tests {
     fn not_found_marker_matches_real_claude_output() {
         // Real wording observed from `claude mcp remove ... --scope <X>`:
         assert!(claude_remove_error_is_not_found(
-            "No user-scoped MCP server found with name: perfetto-mcp-rs"
+            "No user-scoped MCP server found with name: perfetto-rs"
         ));
         assert!(claude_remove_error_is_not_found(
-            "No local-scoped MCP server found with name: perfetto-mcp-rs"
+            "No local-scoped MCP server found with name: perfetto-rs"
         ));
         assert!(claude_remove_error_is_not_found(
-            "no project-scoped mcp server found with name: perfetto-mcp-rs" // case-insensitive
+            "no project-scoped mcp server found with name: perfetto-rs" // case-insensitive
         ));
         // Generic fallback marker.
         assert!(claude_remove_error_is_not_found("server not found"));
@@ -1046,7 +1127,7 @@ mod tests {
         assert!(body.contains("Claude Code (CLI):"));
         // CLI hint must include the actual paste-ready command with scope
         // and binary path the caller passed in.
-        assert!(body.contains("claude mcp add perfetto-mcp-rs --scope user --"));
+        assert!(body.contains("claude mcp add perfetto-rs --scope user --"));
         assert!(body.contains("/usr/local/bin/perfetto-mcp-rs"));
     }
 
@@ -1069,6 +1150,78 @@ mod tests {
         let bin = PathBuf::from("/usr/local/bin/perfetto-mcp-rs");
         let body = claude_manual_install_body(&bin, ClaudeScope::Local, false, true);
         assert!(body.contains("--scope local"));
+    }
+
+    // Migration hint regression locks. Both Claude manual fallback bodies
+    // must mention the pre-rename `perfetto-mcp-rs` name so CLI-less
+    // upgraders (paste-config only) can clean their own orphan; without
+    // this, the binary's in-process legacy cleanup can't reach them and
+    // they're left with a silent zombie entry.
+    #[test]
+    fn claude_manual_install_body_mentions_legacy_name_for_upgraders() {
+        let bin = PathBuf::from("/usr/local/bin/perfetto-mcp-rs");
+
+        // CLI subsection: paste-ready remove command for the legacy name.
+        let cli_body = claude_manual_install_body(&bin, ClaudeScope::User, false, true);
+        assert!(
+            cli_body.contains("claude mcp remove perfetto-mcp-rs --scope user"),
+            "CLI section must include a legacy-name remove command: {cli_body}"
+        );
+
+        // Desktop subsection: mention the legacy key by name so the user
+        // knows what to strip out of their existing `mcpServers` block.
+        let desktop_body = claude_manual_install_body(&bin, ClaudeScope::User, true, false);
+        assert!(
+            desktop_body.contains("perfetto-mcp-rs"),
+            "Desktop section must mention the legacy key by name: {desktop_body}"
+        );
+    }
+
+    #[test]
+    fn claude_manual_uninstall_body_mentions_legacy_name_for_upgraders() {
+        let cli_body = claude_manual_uninstall_body(ClaudeScope::User, false, true);
+        assert!(
+            cli_body.contains("claude mcp remove perfetto-mcp-rs --scope user"),
+            "uninstall CLI section must include a legacy-name remove command: {cli_body}"
+        );
+
+        let desktop_body = claude_manual_uninstall_body(ClaudeScope::User, true, false);
+        assert!(
+            desktop_body.contains("perfetto-mcp-rs"),
+            "uninstall Desktop section must mention the legacy key: {desktop_body}"
+        );
+    }
+
+    // Codex-side mirrors of the Claude regression locks above. Codex has no
+    // scope concept and only one config target (`~/.codex/config.toml`),
+    // so each body is parameterless — but the migration hint matters just
+    // as much: a CLI-less upgrader otherwise has no signal that a
+    // `[mcp_servers.perfetto-mcp-rs]` table from a pre-rename install is
+    // still hiding in their TOML.
+    #[test]
+    fn codex_manual_install_body_mentions_legacy_table_for_upgraders() {
+        let bin = PathBuf::from("/usr/local/bin/perfetto-mcp-rs");
+        let body = codex_manual_install_body(&bin);
+        assert!(
+            body.contains("[mcp_servers.perfetto-mcp-rs]"),
+            "install body must name the legacy TOML table so users know what to strip: {body}"
+        );
+    }
+
+    #[test]
+    fn codex_manual_uninstall_body_mentions_legacy_table_for_upgraders() {
+        let body = codex_manual_uninstall_body();
+        assert!(
+            body.contains("[mcp_servers.perfetto-mcp-rs]"),
+            "uninstall body must name the legacy TOML table: {body}"
+        );
+        // Also covers the current-name removal — sanity-check we didn't
+        // accidentally regress the primary instruction while focused on
+        // the legacy hint.
+        assert!(
+            body.contains("[mcp_servers.perfetto-rs]"),
+            "uninstall body must still name the current TOML table: {body}"
+        );
     }
 
     // Lock blocking semantics: aggregate must propagate `blocking: true`
@@ -1187,15 +1340,15 @@ mod tests {
         // → must NOT be classified benign.
         assert!(!claude_remove_error_is_not_found(
             "Warning: ~/.claude.json was corrupted; backed up to ~/.claude.json.bak.\n\
-             No user-scoped MCP server found with name: perfetto-mcp-rs"
+             No user-scoped MCP server found with name: perfetto-rs"
         ));
         assert!(!claude_remove_error_is_not_found(
             "Error: failed to load ~/.claude.json: syntax error. Using fresh config.\n\
-             No user-scoped MCP server found with name: perfetto-mcp-rs"
+             No user-scoped MCP server found with name: perfetto-rs"
         ));
         assert!(!claude_remove_error_is_not_found(
             "could not write ~/.claude.json: permission denied. \
-             No user-scoped MCP server found with name: perfetto-mcp-rs"
+             No user-scoped MCP server found with name: perfetto-rs"
         ));
         assert!(!claude_remove_error_is_not_found(
             "unable to read config. No user-scoped MCP server found with name: x"

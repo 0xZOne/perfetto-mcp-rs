@@ -121,11 +121,11 @@ main() {
     # registration, they need a `cd` + manual `claude mcp remove --scope X`
     # anyway because local/project entries are CWD-keyed.
     command -v claude >/dev/null 2>&1 \
-      && claude mcp remove perfetto-mcp-rs --scope user 2>&1 | sed 's/^/    /'
+      && claude mcp remove perfetto-rs --scope user 2>&1 | sed 's/^/    /'
     command -v codex >/dev/null 2>&1 \
-      && codex mcp remove perfetto-mcp-rs 2>&1 | sed 's/^/    /'
+      && codex mcp remove perfetto-rs 2>&1 | sed 's/^/    /'
     warn "If you also had a --scope local/project registration, from that project dir run:"
-    warn "  claude mcp remove perfetto-mcp-rs --scope local    # or --scope project"
+    warn "  claude mcp remove perfetto-rs --scope local    # or --scope project"
     warn "Cache not auto-cleaned (binary missing). Remove manually:"
     warn "  Linux:   rm -rf \"\${XDG_DATA_HOME:-\$HOME/.local/share}/perfetto-mcp-rs\""
     warn "  macOS:   rm -rf \"\$HOME/Library/Application Support/perfetto-mcp-rs\""

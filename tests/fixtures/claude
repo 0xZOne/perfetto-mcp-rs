@@ -64,7 +64,7 @@ case "$op" in
     if [ "$exit_code" -eq 0 ] && [ -s "$state_file" ]; then
       # Claude-flavored format; our production parser accepts this AND the
       # Codex whitespace-separated variant via the same line-prefix check.
-      printf 'perfetto-mcp-rs: /fake/path\n'
+      printf 'perfetto-rs: /fake/path\n'
     fi
     ;;
   ADD)

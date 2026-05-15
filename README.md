@@ -226,7 +226,7 @@ If the installer's auto-registration doesn't apply to your client:
 **Codex:**
 
 ```sh
-codex mcp add perfetto-mcp-rs -- /absolute/path/to/perfetto-mcp-rs
+codex mcp add perfetto-rs -- /absolute/path/to/perfetto-mcp-rs
 ```
 
 **JSON-based clients (e.g. Claude Code, Claude Desktop, Cursor):**
@@ -234,7 +234,7 @@ codex mcp add perfetto-mcp-rs -- /absolute/path/to/perfetto-mcp-rs
 ```json
 {
   "mcpServers": {
-    "perfetto-mcp-rs": {
+    "perfetto-rs": {
       "command": "/absolute/path/to/perfetto-mcp-rs"
     }
   }

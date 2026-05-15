@@ -124,13 +124,13 @@ function Uninstall-PerfettoMcp {
         # need a manual `cd` + `claude mcp remove` anyway.
         _warn "binary missing at ${dest}; running shell fallback for deregistration."
         if (Get-Command claude -ErrorAction SilentlyContinue) {
-            _invokeNative { & claude mcp remove perfetto-mcp-rs --scope user 2>&1 | ForEach-Object { Write-Host "    $_" } } | Out-Null
+            _invokeNative { & claude mcp remove perfetto-rs --scope user 2>&1 | ForEach-Object { Write-Host "    $_" } } | Out-Null
         }
         if (Get-Command codex -ErrorAction SilentlyContinue) {
-            _invokeNative { & codex mcp remove perfetto-mcp-rs 2>&1 | ForEach-Object { Write-Host "    $_" } } | Out-Null
+            _invokeNative { & codex mcp remove perfetto-rs 2>&1 | ForEach-Object { Write-Host "    $_" } } | Out-Null
         }
         _warn "If you also had a --scope local/project registration, from that project dir run:"
-        _warn "  claude mcp remove perfetto-mcp-rs --scope local    # or --scope project"
+        _warn "  claude mcp remove perfetto-rs --scope local    # or --scope project"
         _warn "Cache not auto-cleaned (binary missing). Remove manually:"
         _warn "  Remove-Item -Recurse -Force `"`$env:LOCALAPPDATA\perfetto-mcp-rs`""
         $removable = $true
